@@ -12,6 +12,11 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      // Registration is done by hand in main.jsx instead of being injected,
+      // because a service worker must not be registered inside the Capacitor
+      // WebView: registration throws there, and the app has no use for offline
+      // caching when its assets are already on the device.
+      injectRegister: null,
       includeAssets: ['favicon.svg', 'logo.svg'],
       manifest: {
         name: 'Pink Wardrobe',

@@ -26,9 +26,17 @@
 
         function show(title, detail) {
           if (shown) return;
-          shown = true;
 
           var root = document.getElementById('root');
+
+          // If the app has already rendered, it is running and this error was
+          // survivable — a failed service-worker registration, a broken image,
+          // an analytics call. Replacing a working screen with an error page
+          // would turn a harmless problem into a fatal one.
+          if (root && root.children.length > 0) return;
+
+          shown = true;
+
           if (!root) return;
 
           root.innerHTML =
@@ -44,6 +52,10 @@
         }
 
         window.addEventListener('error', function (event) {
+          // Resource errors (a missing image or stylesheet) bubble here too and
+          // are not startup failures.
+          if (event.target && event.target !== window) return;
+
           show(
             'The app could not start',
             (event.message || 'Unknown error') +
