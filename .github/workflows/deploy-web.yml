@@ -1,0 +1,107 @@
+name: Deploy web app
+
+# Publishes the web build to GitHub Pages so changes can be tested in a browser
+# without rebuilding and reinstalling the APK. Same code, same Supabase project
+# — only the shell differs.
+#
+# Requires the repository to be public (GitHub Pages does not serve private
+# repositories on free accounts). This publishes nothing the APK does not
+# already contain: the bundle and the publishable key ship inside every APK.
+# User data is protected by RLS and private buckets, not by hiding this.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pink-wardrobe/web/**'
+      - '.github/workflows/deploy-web.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; let a newer push supersede an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pink-wardrobe/web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: pink-wardrobe/web/package-lock.json
+
+      # enablement turns Pages on via the API if it is off, so this works
+      # without anyone visiting the settings page.
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Check required secrets
+        env:
+          URL: ${{ secrets.VITE_SUPABASE_URL }}
+          ANON: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          missing=0
+          [ -z "$URL" ]  && echo "::error::VITE_SUPABASE_URL is not set"      && missing=1
+          [ -z "$ANON" ] && echo "::error::VITE_SUPABASE_ANON_KEY is not set" && missing=1
+          [ "$missing" -eq 1 ] && exit 1
+          echo "Secrets present."
+
+      - run: npm ci
+
+      - name: Build
+        env:
+          # A project Pages site is served from /<repo>/, not the domain root.
+          VITE_BASE: ${{ steps.pages.outputs.base_path }}/
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_OPENWEATHER_API_KEY: ${{ secrets.VITE_OPENWEATHER_API_KEY }}
+        run: npm run build
+
+      - name: SPA fallback
+        # Pages serves static files, so a deep link like /me would 404 on
+        # refresh. Serving index.html as the 404 page hands those URLs back to
+        # the client router.
+        run: cp dist/index.html dist/404.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: pink-wardrobe/web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Summary
+        run: |
+          {
+            echo "### Web app deployed"
+            echo ""
+            echo "Open **${{ steps.deployment.outputs.page_url }}** to test."
+            echo ""
+            echo "Same code as the APK against the same Supabase project, so a"
+            echo "fix verified here is verified for the APK."
+          } >> "$GITHUB_STEP_SUMMARY"

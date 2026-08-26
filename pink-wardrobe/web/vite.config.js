@@ -3,6 +3,11 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
+  // GitHub project Pages serve from /<repo>/, while the APK loads from the
+  // WebView root. VITE_BASE lets the Pages build set the subpath without
+  // affecting the APK, which must stay at '/'.
+  base: process.env.VITE_BASE || '/',
+
   plugins: [
     react(),
     VitePWA({

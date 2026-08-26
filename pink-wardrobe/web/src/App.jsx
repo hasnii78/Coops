@@ -45,8 +45,10 @@ function Gate() {
 }
 
 export default function App() {
+  // BASE_URL is '/' for the APK and '/<repo>/' for the GitHub Pages build, so
+  // the router resolves links correctly under either.
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={import.meta.env.BASE_URL}>
       <AuthProvider>
         <ThemeProvider>
           <Gate />
