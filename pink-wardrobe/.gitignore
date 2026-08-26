@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.firebase/
+.firebaserc
+
+# Secrets and local config — never commit these.
+.env
+.env.local
+.env.*.local
+*serviceAccount*.json
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+.DS_Store
+*.log

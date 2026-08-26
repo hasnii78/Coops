@@ -1,0 +1,18 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "recycleBin",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [{ "fieldPath": "deletedAt", "order": "ASCENDING" }]
+    },
+    {
+      "collectionGroup": "items",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "category", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

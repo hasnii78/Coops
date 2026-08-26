@@ -1,0 +1,103 @@
+/*
+ * Pink Wardrobe — theme tokens.
+ *
+ * Every colour in the app resolves through these variables, so switching
+ * theme is a single attribute change on <html> with no re-render required.
+ * Text size scales the same way, via --text-base.
+ */
+
+:root {
+  /* Neutrals — shared across all four themes. */
+  --ink: #2B1620;
+  --muted: #8A6572;
+  --line: #F1E4EA;
+  --surface: #FFFFFF;
+  --surface-sunken: #FDF8FA;
+
+  /* Geometry. The brief calls for soft, rounded, unshadowed surfaces. */
+  --radius-sm: 10px;
+  --radius-md: 12px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Text size — overridden by the Names & text size panel. */
+  --text-base: 16px;
+  --text-xs: calc(var(--text-base) * 0.75);
+  --text-sm: calc(var(--text-base) * 0.875);
+  --text-md: var(--text-base);
+  --text-lg: calc(var(--text-base) * 1.125);
+  --text-xl: calc(var(--text-base) * 1.375);
+  --text-2xl: calc(var(--text-base) * 1.75);
+
+  --tap-target: 44px;
+}
+
+/* --- Pink (default) ----------------------------------------------------- */
+:root,
+:root[data-theme='pink'] {
+  --c-50:  #FBEAF0;
+  --c-100: #F4C0D1;
+  --c-200: #ED93B1;
+  --c-400: #D4537E;
+  --c-600: #993556;
+  --c-800: #72243E;
+  --c-900: #4B1528;
+}
+
+/* --- Dark red ----------------------------------------------------------- */
+:root[data-theme='darkred'] {
+  --c-50:  #F5E6E6;
+  --c-100: #E0BDBD;
+  --c-200: #CC8F8F;
+  --c-400: #A83232;
+  --c-600: #7A1F1F;
+  --c-800: #5C1414;
+  --c-900: #3D0D0D;
+}
+
+/* --- Red ---------------------------------------------------------------- */
+:root[data-theme='red'] {
+  --c-50:  #FCE8E6;
+  --c-100: #F5C2BC;
+  --c-200: #EC8F84;
+  --c-400: #D9342A;
+  --c-600: #B22222;
+  --c-800: #8B1A1A;
+  --c-900: #5C1010;
+}
+
+/* --- Brown -------------------------------------------------------------- */
+:root[data-theme='brown'] {
+  --c-50:  #F0E6DC;
+  --c-100: #DDC3A8;
+  --c-200: #C39A6C;
+  --c-400: #8B5E34;
+  --c-600: #6B4423;
+  --c-800: #4A2F18;
+  --c-900: #331F0F;
+}
+
+/*
+ * Dark mode. Rather than redefining every brand step, the neutrals invert and
+ * the palette's deep steps become surfaces — which keeps each theme
+ * recognisably itself in the dark.
+ */
+:root[data-dark='true'] {
+  --ink: #F7EDF1;
+  --muted: #B396A2;
+  --line: #3A2530;
+  --surface: #241620;
+  --surface-sunken: #1A0F17;
+}
+
+/* Text-size settings from the Profile panel. */
+:root[data-text-size='small']  { --text-base: 14px; }
+:root[data-text-size='medium'] { --text-base: 16px; }
+:root[data-text-size='large']  { --text-base: 19px; }
