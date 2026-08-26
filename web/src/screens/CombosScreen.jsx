@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import EmptyState from '../components/EmptyState';
+import SendToSheet from '../components/SendToSheet';
 import { IconHeart, IconPin, IconSend } from '../components/Icons';
 import { useAuth } from '../context/AuthContext';
 import { listCombos, resolveUrl, wearCombo } from '../lib/closet';
@@ -9,8 +11,10 @@ import { db } from '../firebase';
 
 export default function CombosScreen() {
   const { uid } = useAuth();
+  const navigate = useNavigate();
   const [combos, setCombos] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(null);
 
   async function refresh() {
     if (!uid) return;
@@ -22,6 +26,15 @@ export default function CombosScreen() {
 
   const pinned = useMemo(() => combos.filter((combo) => combo.pinned), [combos]);
   const rest = useMemo(() => combos.filter((combo) => !combo.pinned), [combos]);
+
+  /**
+   * Remix opens the builder with this outfit already selected, so swapping a
+   * piece reuses the existing layers. Nothing is regenerated and nothing is
+   * charged.
+   */
+  function handleRemix(combo) {
+    navigate('/me', { state: { preselectItemIds: combo.itemIds || [] } });
+  }
 
   async function patch(combo, changes) {
     await updateDoc(doc(db, 'users', uid, 'combos', combo.id), changes);
@@ -52,7 +65,8 @@ export default function CombosScreen() {
               <section className="stack">
                 <h2 className="section-title">Pinned</h2>
                 {pinned.map((combo) => (
-                  <ComboRow key={combo.id} combo={combo} onPatch={patch} uid={uid} onWorn={refresh} />
+                  <ComboRow key={combo.id} combo={combo} onPatch={patch} uid={uid}
+                    onWorn={refresh} onRemix={handleRemix} onSend={setSending} />
                 ))}
               </section>
             ) : null}
@@ -60,17 +74,30 @@ export default function CombosScreen() {
             <section className="stack">
               <h2 className="section-title">All outfits</h2>
               {rest.map((combo) => (
-                <ComboRow key={combo.id} combo={combo} onPatch={patch} uid={uid} onWorn={refresh} />
+                <ComboRow key={combo.id} combo={combo} onPatch={patch} uid={uid}
+                  onWorn={refresh} onRemix={handleRemix} onSend={setSending} />
               ))}
             </section>
           </>
         )}
       </main>
+
+      {sending ? (
+        <SendToSheet
+          outfitName={sending.name}
+          getBlob={async () => {
+            if (!sending.compositePath) return null;
+            const url = await resolveUrl(sending.compositePath);
+            return (await fetch(url)).blob();
+          }}
+          onClose={() => setSending(null)}
+        />
+      ) : null}
     </>
   );
 }
 
-function ComboRow({ combo, onPatch, uid, onWorn }) {
+function ComboRow({ combo, onPatch, uid, onWorn, onRemix, onSend }) {
   const [thumb, setThumb] = useState(null);
 
   useEffect(() => {
@@ -111,6 +138,13 @@ function ComboRow({ combo, onPatch, uid, onWorn }) {
         <button type="button" className="chip"
           onClick={() => wearCombo(uid, combo).then(onWorn)}>
           Worn
+        </button>
+        <button type="button" className="chip" onClick={() => onRemix?.(combo)}>
+          Remix
+        </button>
+        <button type="button" className="chip" aria-label={`Send ${combo.name} to someone`}
+          disabled={!combo.compositePath} onClick={() => onSend?.(combo)}>
+          <IconSend width={14} height={14} />
         </button>
       </div>
     </article>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 
 import EmptyState from '../components/EmptyState';
 import SendToSheet from '../components/SendToSheet';
@@ -17,6 +18,7 @@ import { compositeToCanvas, canvasToBlob } from '../lib/compositor';
  */
 export default function MeScreen() {
   const { uid, profile } = useAuth();
+  const location = useLocation();
   const canvasRef = useRef(null);
 
   const [items, setItems] = useState([]);
@@ -30,9 +32,22 @@ export default function MeScreen() {
 
   useEffect(() => {
     if (!uid) return;
-    listItems(uid).then((next) =>
-      setItems(next.filter((item) => item.status === 'ready' && !item.retired)));
-  }, [uid]);
+    listItems(uid).then((next) => {
+      const ready = next.filter((item) => item.status === 'ready' && !item.retired);
+      setItems(ready);
+
+      // Arriving from Remix: preselect the outfit so swapping one piece
+      // reuses the existing layers rather than rebuilding anything.
+      const preselect = location.state?.preselectItemIds;
+      if (preselect?.length) {
+        const chosen = {};
+        for (const item of ready) {
+          if (preselect.includes(item.id)) chosen[item.category] = item;
+        }
+        setSelected(chosen);
+      }
+    });
+  }, [uid, location.state]);
 
   useEffect(() => {
     if (profile?.avatar?.storagePath) {
