@@ -7,12 +7,33 @@ import { createClient } from '@supabase/supabase-js';
  * The service role key and the FASHN key are server-side only and must never
  * appear in any file under src/.
  */
-const url = import.meta.env.VITE_SUPABASE_URL;
-const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const rawUrl = (import.meta.env.VITE_SUPABASE_URL ?? '').trim();
+const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
 
-if (!url || !anonKey) {
+if (!rawUrl || !anonKey) {
   throw new Error(
     'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY. Copy .env.example to web/.env.local.',
+  );
+}
+
+/**
+ * Normalise the project URL.
+ *
+ * The SDK appends paths like `/functions/v1/<name>` directly. A trailing slash
+ * on the configured value therefore produces a double slash, which Supabase's
+ * gateway rejects with "Invalid path specified in request URL" — an error that
+ * looks like a broken function but is really a stray character in config.
+ *
+ * Copying the URL out of the dashboard picks up that slash easily, so it is
+ * stripped here rather than relying on whoever set the variable.
+ */
+const url = rawUrl.replace(/\/+$/, '');
+
+if (!/^https:\/\/[a-z0-9-]+\.supabase\.(co|in)$/i.test(url)) {
+  // Catching this at startup beats a confusing gateway error on first use.
+  throw new Error(
+    `VITE_SUPABASE_URL does not look like a Supabase project URL: "${url}". ` +
+      'It should be https://<project-ref>.supabase.co with no path or trailing slash.',
   );
 }
 
