@@ -33,9 +33,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: supabase/setup-cli@v1
+      # The CLI comes from npm rather than supabase/setup-cli@v1. That action
+      # resolves "latest" through GitHub's releases API unauthenticated, which
+      # rate-limits and fails the whole run:
+      #   Failed to resolve latest Supabase CLI release: rate limit exceeded
+      # npm has no such limit, and this matches what docs/LOCAL_SETUP.md tells
+      # a human to run.
+      - uses: actions/setup-node@v4
         with:
-          version: latest
+          node-version: '20'
+
+      - name: Install Supabase CLI
+        run: |
+          npm install --no-save --no-audit --no-fund supabase
+          npx supabase --version
 
       - name: Check required secrets
         env:
@@ -57,14 +68,14 @@ jobs:
 
           # signup must be callable before the user has a session, and the
           # purge job authenticates with its own header rather than a JWT.
-          supabase functions deploy signup \
+          npx supabase functions deploy signup \
             --project-ref "$PROJECT_REF" --no-verify-jwt
 
-          supabase functions deploy purge-recycle-bin \
+          npx supabase functions deploy purge-recycle-bin \
             --project-ref "$PROJECT_REF" --no-verify-jwt
 
           # process-garment spends money, so it always requires a real session.
-          supabase functions deploy process-garment \
+          npx supabase functions deploy process-garment \
             --project-ref "$PROJECT_REF"
 
       - name: Apply migrations
@@ -81,8 +92,8 @@ jobs:
             exit 1
           fi
 
-          supabase link --project-ref "$PROJECT_REF"
-          supabase db push
+          npx supabase link --project-ref "$PROJECT_REF"
+          npx supabase db push
 
       - name: Summary
         run: |
