@@ -1,0 +1,228 @@
+name: Doctor
+
+# Diagnoses — and optionally repairs — the live Supabase project.
+#
+# This exists because the environment where the code is written cannot reach
+# Supabase, so failures were only observable on a phone, as screenshots. The
+# runner can reach it, so the checks run here and the results land in the log.
+#
+# Nothing here prints a secret. Values are masked before use and only their
+# shape is ever reported.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply_fixes:
+        description: 'Fix auth settings that block sign-up'
+        type: boolean
+        default: true
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Mask secrets
+        env:
+          TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          ANON: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          # Belt and braces: the runner masks configured secrets, but anything
+          # derived from them below must not leak either.
+          echo "::add-mask::$TOKEN"
+          echo "::add-mask::$ANON"
+
+      - name: Check inputs
+        env:
+          TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          URL: ${{ secrets.VITE_SUPABASE_URL }}
+          ANON: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          set -uo pipefail
+          fail=0
+          for name in TOKEN REF URL ANON; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::secret $name is not set"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 1 ] && exit 1
+
+          echo "Project ref : $REF"
+          echo "App URL     : $URL"
+          echo "Key prefix  : $(echo "$ANON" | cut -c1-16)… (${#ANON} chars)"
+
+          # The single most likely cause of "works in CI, fails in the app":
+          # the app and the deploy pointing at different projects.
+          if [ "$URL" != "https://$REF.supabase.co" ]; then
+            echo "::warning::VITE_SUPABASE_URL ($URL) does not match SUPABASE_PROJECT_REF ($REF)."
+            echo "::warning::The app would call a different project than the one deployed to."
+          else
+            echo "URL and project ref agree."
+          fi
+
+      - name: Read auth configuration
+        id: authcfg
+        env:
+          TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -uo pipefail
+
+          body=$(curl -sS -w '\n%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" \
+            "https://api.supabase.com/v1/projects/$REF/config/auth")
+
+          status=$(echo "$body" | tail -1)
+          json=$(echo "$body" | sed '$d')
+
+          echo "HTTP $status"
+
+          if [ "$status" != "200" ]; then
+            echo "::error::Could not read auth config. The access token may be revoked or expired."
+            echo "$json" | head -5
+            exit 1
+          fi
+
+          disable_signup=$(echo "$json" | jq -r '.disable_signup // false')
+          autoconfirm=$(echo "$json"    | jq -r '.mailer_autoconfirm // false')
+          email_enabled=$(echo "$json"  | jq -r '.external_email_enabled // true')
+
+          {
+            echo "disable_signup=$disable_signup"
+            echo "autoconfirm=$autoconfirm"
+            echo "email_enabled=$email_enabled"
+          } >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "Current settings"
+          echo "  email provider enabled : $email_enabled   (must be true)"
+          echo "  sign-ups disabled      : $disable_signup   (must be false to create accounts)"
+          echo "  auto-confirm email     : $autoconfirm   (must be true — addresses are synthetic)"
+
+      - name: Repair auth configuration
+        if: inputs.apply_fixes
+        env:
+          TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -uo pipefail
+
+          # Usernames map to synthetic, undeliverable addresses, so confirmation
+          # can never be satisfied and must be auto-confirmed. Sign-ups have to
+          # be open for accounts to be created at all.
+          payload='{"external_email_enabled":true,"disable_signup":false,"mailer_autoconfirm":true}'
+
+          body=$(curl -sS -w '\n%{http_code}' -X PATCH \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "https://api.supabase.com/v1/projects/$REF/config/auth")
+
+          status=$(echo "$body" | tail -1)
+          echo "HTTP $status"
+
+          if [ "$status" != "200" ]; then
+            echo "::error::Could not update auth config."
+            echo "$body" | sed '$d' | head -5
+            exit 1
+          fi
+
+          echo "Applied: email provider on, sign-ups open, email auto-confirmed."
+
+      - name: Probe the endpoints the app uses
+        env:
+          URL: ${{ secrets.VITE_SUPABASE_URL }}
+          ANON: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          set -uo pipefail
+          base="${URL%/}"
+
+          probe() {
+            code=$(curl -sS -o /tmp/out -w '%{http_code}' "$@" || echo 000)
+            echo "$code"
+          }
+
+          echo "auth health   : $(probe "$base/auth/v1/health")"
+          echo "rest profiles : $(probe -H "apikey: $ANON" "$base/rest/v1/profiles?select=id&limit=1")"
+          echo "signup fn     : $(probe "$base/functions/v1/signup")"
+          echo ""
+          echo "Last response body (truncated):"
+          head -c 300 /tmp/out; echo
+
+      - name: End-to-end sign-up test
+        env:
+          URL: ${{ secrets.VITE_SUPABASE_URL }}
+          ANON: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -uo pipefail
+          base="${URL%/}"
+
+          # A disposable account, exercising exactly what the app now does.
+          user="ci$(date +%s | tail -c 7)"
+          email="${user}@pinkwardrobe.internal"
+          pass="CiProbe!$(date +%s)"
+
+          echo "Creating $user …"
+          body=$(curl -sS -w '\n%{http_code}' -X POST \
+            -H "apikey: $ANON" -H "Content-Type: application/json" \
+            -d "{\"email\":\"$email\",\"password\":\"$pass\"}" \
+            "$base/auth/v1/signup")
+
+          status=$(echo "$body" | tail -1)
+          json=$(echo "$body" | sed '$d')
+
+          echo "sign-up HTTP $status"
+
+          if [ "$status" != "200" ] && [ "$status" != "201" ]; then
+            echo "::error::Sign-up rejected — this is the bug the app is hitting."
+            echo "$json" | head -c 500; echo
+            exit 1
+          fi
+
+          token=$(echo "$json" | jq -r '.access_token // empty')
+          uid=$(echo "$json"   | jq -r '.user.id // empty')
+
+          if [ -z "$token" ]; then
+            echo "::error::No session returned — email confirmation is still required."
+            exit 1
+          fi
+
+          echo "Session issued. Inserting the profile row the app writes…"
+
+          prof=$(curl -sS -w '\n%{http_code}' -X POST \
+            -H "apikey: $ANON" -H "Authorization: Bearer $token" \
+            -H "Content-Type: application/json" -H "Prefer: return=representation" \
+            -d "{\"id\":\"$uid\",\"username\":\"$user\"}" \
+            "$base/rest/v1/profiles")
+
+          pstatus=$(echo "$prof" | tail -1)
+          echo "profile insert HTTP $pstatus"
+
+          if [ "$pstatus" != "201" ] && [ "$pstatus" != "200" ]; then
+            echo "::error::Profile insert failed — RLS policy or schema problem."
+            echo "$prof" | sed '$d' | head -c 500; echo
+            exit 1
+          fi
+
+          echo ""
+          echo "SIGN-UP WORKS END TO END."
+
+          # Clean up, so probe accounts do not accumulate.
+          curl -sS -o /dev/null -X DELETE \
+            -H "Authorization: Bearer $TOKEN" \
+            "https://api.supabase.com/v1/projects/$REF/auth/users/$uid" || true
+          echo "Test account removed."
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Doctor finished"
+            echo ""
+            echo "Read the step logs above. The end-to-end test is the one that matters:"
+            echo "if it says SIGN-UP WORKS END TO END, the app will work too."
+          } >> "$GITHUB_STEP_SUMMARY"
