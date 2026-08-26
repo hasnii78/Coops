@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import Logo from '../assets/Logo';
 import { signIn, signUp, validateUsername } from '../lib/auth';
+import { diagnose } from '../lib/diagnose';
 
 /**
  * Username + password only. There is deliberately no email field anywhere —
@@ -14,6 +15,8 @@ export default function AuthScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [checks, setChecks] = useState(null);
+  const [checking, setChecking] = useState(false);
 
   const isSignUp = mode === 'signup';
 
@@ -27,11 +30,23 @@ export default function AuthScreen() {
     }
 
     setBusy(true);
+    setChecks(null);
+
     try {
       if (isSignUp) await signUp({ username, password });
       else await signIn({ username, password });
     } catch (caught) {
       setError(caught.message);
+
+      // A network-level failure tells the page nothing on its own — the
+      // browser hides whether it was CORS, a dead function or a wrong URL.
+      // Run the checks straight away so the cause is on screen rather than
+      // only in DevTools.
+      setChecking(true);
+      diagnose()
+        .then(setChecks)
+        .catch(() => setChecks(null))
+        .finally(() => setChecking(false));
     } finally {
       setBusy(false);
     }
@@ -49,6 +64,31 @@ export default function AuthScreen() {
 
       <form className="stack" onSubmit={handleSubmit}>
         {error ? <div className="error-banner" role="alert">{error}</div> : null}
+
+        {checking ? (
+          <div className="muted row" style={{ gap: 'var(--space-2)' }}>
+            <span className="spinner" aria-hidden="true" /> Checking the connection…
+          </div>
+        ) : null}
+
+        {checks ? (
+          <div className="card stack" style={{ gap: 'var(--space-2)' }}>
+            <span className="section-title">Connection check</span>
+            {checks.map((check) => (
+              <div key={check.label} className="stack" style={{ gap: 2 }}>
+                <strong style={{ fontSize: 'var(--text-sm)' }}>
+                  <span aria-hidden="true">{check.ok ? '\u2713' : '\u2717'}</span> {check.label}
+                </strong>
+                <span
+                  className="muted"
+                  style={{ fontSize: 'var(--text-xs)', wordBreak: 'break-all' }}
+                >
+                  {check.detail}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         <label className="stack" style={{ gap: 'var(--space-1)' }}>
           <span className="section-title">Username</span>

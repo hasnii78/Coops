@@ -37,6 +37,9 @@ if (!/^https:\/\/[a-z0-9-]+\.supabase\.(co|in)$/i.test(url)) {
   );
 }
 
+export const supabaseUrl = url;
+export const supabaseAnonKey = anonKey;
+
 export const supabase = createClient(url, anonKey, {
   auth: {
     persistSession: true,
