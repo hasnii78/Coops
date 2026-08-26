@@ -55,11 +55,19 @@ jobs:
 
           # The single most likely cause of "works in CI, fails in the app":
           # the app and the deploy pointing at different projects.
-          if [ "$URL" != "https://$REF.supabase.co" ]; then
-            echo "::warning::VITE_SUPABASE_URL ($URL) does not match SUPABASE_PROJECT_REF ($REF)."
+          origin=$(echo "$URL" | sed -E 's#^(https?://[^/]+).*#\1#')
+
+          if [ "$origin" != "$URL" ]; then
+            echo "::warning::VITE_SUPABASE_URL carries a path: $URL"
+            echo "::warning::The SDK appends its own (/auth/v1, /rest/v1), so requests land on the wrong service."
+            echo "::warning::Set it to $origin — the app now trims this, but fix the secret too."
+          fi
+
+          if [ "$origin" != "https://$REF.supabase.co" ]; then
+            echo "::warning::URL origin ($origin) does not match project ref ($REF)."
             echo "::warning::The app would call a different project than the one deployed to."
           else
-            echo "URL and project ref agree."
+            echo "URL origin and project ref agree."
           fi
 
       - name: Read auth configuration
@@ -137,7 +145,9 @@ jobs:
           ANON: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: |
           set -uo pipefail
-          base="${URL%/}"
+          # The app reduces the configured URL to its origin; do the same here,
+          # or this probes a different address than the app uses.
+          base=$(echo "$URL" | sed -E 's#^(https?://[^/]+).*#\1#')
 
           probe() {
             code=$(curl -sS -o /tmp/out -w '%{http_code}' "$@" || echo 000)
@@ -159,7 +169,9 @@ jobs:
           REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           set -uo pipefail
-          base="${URL%/}"
+          # The app reduces the configured URL to its origin; do the same here,
+          # or this probes a different address than the app uses.
+          base=$(echo "$URL" | sed -E 's#^(https?://[^/]+).*#\1#')
 
           # A disposable account, exercising exactly what the app now does.
           user="ci$(date +%s | tail -c 7)"

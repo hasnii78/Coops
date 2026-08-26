@@ -27,17 +27,37 @@ if (!rawUrl || !anonKey) {
 }
 
 /**
- * Normalise the project URL.
+ * Reduce the configured value to a bare origin.
  *
- * The SDK appends paths like `/functions/v1/<name>` directly. A trailing slash
- * on the configured value therefore produces a double slash, which Supabase's
- * gateway rejects with "Invalid path specified in request URL" — an error that
- * looks like a broken function but is really a stray character in config.
+ * The SDK appends its own paths — `/auth/v1/...`, `/rest/v1/...`,
+ * `/functions/v1/...` — so anything beyond the origin corrupts every request.
+ * A URL of `https://ref.supabase.co/rest/v1` turns a sign-up into
+ * `/rest/v1/auth/v1/signup`, which PostgREST answers with
+ * `PGRST125 Invalid path specified in request URL`. That reads like a broken
+ * function or a dead server, and is neither.
  *
- * Copying the URL out of the dashboard picks up that slash easily, so it is
- * stripped here rather than relying on whoever set the variable.
+ * The dashboard shows several URLs and it is easy to copy the wrong one, so
+ * the path and any trailing slash are discarded here rather than trusting
+ * whoever set the variable.
  */
-const url = rawUrl.replace(/\/+$/, '');
+function toOrigin(value) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    // Not parseable as a URL — strip a trailing slash and let the check below
+    // report it rather than throwing during module load.
+    return value.replace(/\/+$/, '');
+  }
+}
+
+const url = toOrigin(rawUrl);
+
+if (url !== rawUrl.replace(/\/+$/, '')) {
+  console.warn(
+    `VITE_SUPABASE_URL contained more than an origin; using "${url}". ` +
+      'Set it to https://<project-ref>.supabase.co with no path.',
+  );
+}
 
 // A shape that does not look like a project URL is worth flagging, but it is
 // only a warning: Supabase self-hosting and custom domains are legitimate, and
