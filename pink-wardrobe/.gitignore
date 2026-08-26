@@ -9,6 +9,11 @@ dist/
 .env.*.local
 *serviceAccount*.json
 
+# Firebase reads the emulator's secret values from this file. It holds your
+# real FASHN key in plaintext — it must never be committed.
+.secret.local
+functions/.secret.local
+
 # Python
 __pycache__/
 *.py[cod]
