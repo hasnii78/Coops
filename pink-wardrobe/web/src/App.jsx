@@ -1,6 +1,8 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
 import BottomNav from './components/BottomNav';
+import { ConfigScreen, ErrorBoundary } from './components/ErrorScreen';
+import { configError } from './supabase';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 
@@ -45,15 +47,29 @@ function Gate() {
 }
 
 export default function App() {
+  // Reported rather than thrown, so a misconfigured build still renders
+  // something that explains itself instead of a blank page.
+  if (configError) {
+    return (
+      <ConfigScreen
+        title="Not configured"
+        message={configError}
+        hint="The Supabase URL and publishable key are baked in when the app is built, so this needs a new build to fix."
+      />
+    );
+  }
+
   // BASE_URL is '/' for the APK and '/<repo>/' for the GitHub Pages build, so
   // the router resolves links correctly under either.
   return (
-    <BrowserRouter basename={import.meta.env.BASE_URL}>
-      <AuthProvider>
-        <ThemeProvider>
-          <Gate />
-        </ThemeProvider>
-      </AuthProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter basename={import.meta.env.BASE_URL}>
+        <AuthProvider>
+          <ThemeProvider>
+            <Gate />
+          </ThemeProvider>
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }

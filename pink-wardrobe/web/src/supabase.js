@@ -10,10 +10,20 @@ import { createClient } from '@supabase/supabase-js';
 const rawUrl = (import.meta.env.VITE_SUPABASE_URL ?? '').trim();
 const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
 
+/**
+ * Configuration problems are reported, never thrown.
+ *
+ * Throwing here runs at module load, before React mounts, so the app renders
+ * as a blank white page with the reason visible only in a console the user may
+ * not be able to open. A misconfigured app must still boot far enough to say
+ * what is wrong.
+ */
+export let configError = null;
+
 if (!rawUrl || !anonKey) {
-  throw new Error(
-    'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY. Copy .env.example to web/.env.local.',
-  );
+  configError =
+    'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY. ' +
+    'They must be set when the app is built.';
 }
 
 /**
@@ -29,18 +39,19 @@ if (!rawUrl || !anonKey) {
  */
 const url = rawUrl.replace(/\/+$/, '');
 
-if (!/^https:\/\/[a-z0-9-]+\.supabase\.(co|in)$/i.test(url)) {
-  // Catching this at startup beats a confusing gateway error on first use.
-  throw new Error(
-    `VITE_SUPABASE_URL does not look like a Supabase project URL: "${url}". ` +
-      'It should be https://<project-ref>.supabase.co with no path or trailing slash.',
-  );
+// A shape that does not look like a project URL is worth flagging, but it is
+// only a warning: Supabase self-hosting and custom domains are legitimate, and
+// refusing to start over a pattern miss would be worse than trying.
+if (url && !/^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(url)) {
+  configError =
+    `VITE_SUPABASE_URL does not look like a project URL: "${url}". ` +
+    'Expected https://<project-ref>.supabase.co with no path or trailing slash.';
 }
 
 export const supabaseUrl = url;
 export const supabaseAnonKey = anonKey;
 
-export const supabase = createClient(url, anonKey, {
+export const supabase = createClient(url || 'https://placeholder.supabase.co', anonKey || 'placeholder', {
   auth: {
     persistSession: true,
     autoRefreshToken: true,

@@ -9,6 +9,72 @@
   </head>
   <body>
     <div id="root"></div>
+
+    <!--
+      Last-resort error display.
+
+      React's error boundary cannot catch a failure that happens before the
+      bundle finishes loading — a module-level throw, a missing chunk, a syntax
+      error on an old WebView. Those leave the page blank with the reason only
+      in a console, which on a phone is effectively nowhere.
+
+      This is plain inline script so it runs even if the bundle never does.
+    -->
+    <script>
+      (function () {
+        var shown = false;
+
+        function show(title, detail) {
+          if (shown) return;
+          shown = true;
+
+          var root = document.getElementById('root');
+          if (!root) return;
+
+          root.innerHTML =
+            '<div style="max-width:34rem;margin:0 auto;padding:24px;' +
+            'font-family:system-ui,-apple-system,sans-serif;color:#2B1620">' +
+            '<h1 style="font-size:20px;color:#72243E;margin:0 0 12px">' + title + '</h1>' +
+            '<pre style="white-space:pre-wrap;word-break:break-word;background:#FDECEC;' +
+            'border:1px solid #F3B8B8;border-radius:12px;padding:12px;font-size:13px;' +
+            'color:#8B1A1A;margin:0 0 16px">' + detail + '</pre>' +
+            '<button onclick="location.reload()" style="min-height:44px;padding:0 24px;' +
+            'border:none;border-radius:999px;background:#D4537E;color:#fff;font-weight:700;' +
+            'font-size:16px">Try again</button></div>';
+        }
+
+        window.addEventListener('error', function (event) {
+          show(
+            'The app could not start',
+            (event.message || 'Unknown error') +
+              (event.filename ? '\n\n' + event.filename + ':' + event.lineno : ''),
+          );
+        });
+
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason;
+          show(
+            'The app could not start',
+            (reason && (reason.message || reason)) || 'Unknown error',
+          );
+        });
+
+        // If nothing has rendered after a reasonable wait, the bundle never
+        // arrived — usually a failed asset path or no network on first load.
+        setTimeout(function () {
+          var root = document.getElementById('root');
+          if (root && root.children.length === 0) {
+            show(
+              'The app did not load',
+              'The page loaded but the application bundle did not run.\n' +
+                'This is usually a network problem on first launch, or assets ' +
+                'built for the wrong path.',
+            );
+          }
+        }, 8000);
+      })();
+    </script>
+
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
