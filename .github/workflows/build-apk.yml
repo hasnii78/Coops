@@ -65,6 +65,20 @@ jobs:
       - name: Generate Android project
         run: npx cap add android
 
+      # Generates every icon density plus the adaptive layers from
+      # resources/icon.png. Skipped when no source icon has been added, so the
+      # build still succeeds with Capacitor's default icon.
+      - name: Generate app icons
+        run: |
+          set -euo pipefail
+
+          if [ -f resources/icon.png ]; then
+            npx @capacitor/assets generate --android
+            echo "App icons generated from resources/icon.png"
+          else
+            echo "::notice::No resources/icon.png — using the default Capacitor icon."
+          fi
+
       - name: Sync web assets into Android
         run: npx cap sync android
 
