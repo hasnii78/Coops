@@ -8,13 +8,13 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-import { json } from '../_shared/cors.ts';
+import { json, preflight } from '../_shared/cors.ts';
 
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get('Origin');
 
   if (req.method === 'OPTIONS') {
-    return json({}, 204, origin);
+    return preflight(origin);
   }
 
   // Scheduled invocations authenticate with a shared secret rather than a user

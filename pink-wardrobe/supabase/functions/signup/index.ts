@@ -17,7 +17,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-import { json } from '../_shared/cors.ts';
+import { json, preflight } from '../_shared/cors.ts';
 
 const INTERNAL_DOMAIN = 'pinkwardrobe.internal';
 const USERNAME_PATTERN = /^[a-z0-9_.]{3,20}$/;
@@ -29,7 +29,7 @@ Deno.serve(async (req: Request) => {
   const origin = req.headers.get('Origin');
 
   if (req.method === 'OPTIONS') {
-    return json({}, 204, origin);
+    return preflight(origin);
   }
 
   let body: { username?: string; password?: string; displayName?: string };
