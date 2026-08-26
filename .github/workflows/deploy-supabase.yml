@@ -1,0 +1,100 @@
+name: Deploy Supabase
+
+# Deploys the Edge Functions, and optionally pushes migrations.
+#
+# Runs on any push that touches the supabase directory, and can be triggered by
+# hand from the Actions tab — which is the phone-friendly way to redeploy.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pink-wardrobe/supabase/**'
+      - '.github/workflows/deploy-supabase.yml'
+  workflow_dispatch:
+    inputs:
+      push_migrations:
+        description: 'Also apply database migrations (needs SUPABASE_DB_PASSWORD)'
+        type: boolean
+        default: false
+
+concurrency:
+  # Never let two deploys race against the same project.
+  group: supabase-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pink-wardrobe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Check required secrets
+        env:
+          ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          missing=0
+          [ -z "$ACCESS_TOKEN" ] && echo "::error::SUPABASE_ACCESS_TOKEN is not set" && missing=1
+          [ -z "$PROJECT_REF" ]  && echo "::error::SUPABASE_PROJECT_REF is not set"  && missing=1
+          [ "$missing" -eq 1 ] && exit 1
+          echo "Secrets present."
+
+      - name: Deploy Edge Functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+
+          # signup must be callable before the user has a session, and the
+          # purge job authenticates with its own header rather than a JWT.
+          supabase functions deploy signup \
+            --project-ref "$PROJECT_REF" --no-verify-jwt
+
+          supabase functions deploy purge-recycle-bin \
+            --project-ref "$PROJECT_REF" --no-verify-jwt
+
+          # process-garment spends money, so it always requires a real session.
+          supabase functions deploy process-garment \
+            --project-ref "$PROJECT_REF"
+
+      - name: Apply migrations
+        if: inputs.push_migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_DB_PASSWORD:-}" ]; then
+            echo "::error::SUPABASE_DB_PASSWORD is required to push migrations."
+            exit 1
+          fi
+
+          supabase link --project-ref "$PROJECT_REF"
+          supabase db push
+
+      - name: Summary
+        run: |
+          {
+            echo "### Supabase deploy complete"
+            echo ""
+            echo "| Function | JWT required |"
+            echo "| --- | --- |"
+            echo "| signup | no |"
+            echo "| purge-recycle-bin | no |"
+            echo "| process-garment | yes |"
+            echo ""
+            echo "Secrets (FASHN_API_KEY, PURGE_SECRET) are set in the Supabase"
+            echo "dashboard, not here, and are read at invocation time."
+          } >> "$GITHUB_STEP_SUMMARY"

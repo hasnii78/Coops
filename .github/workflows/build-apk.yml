@@ -1,0 +1,102 @@
+name: Build Android APK
+
+# Builds an installable APK entirely on GitHub — no Android Studio, no laptop.
+#
+# Trigger it from the Actions tab, then download the APK from the run's
+# Artifacts section on your phone and open it to install.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pink-wardrobe/web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: pink-wardrobe/web/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Check required secrets
+        env:
+          URL: ${{ secrets.VITE_SUPABASE_URL }}
+          ANON: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          missing=0
+          [ -z "$URL" ]  && echo "::error::VITE_SUPABASE_URL is not set"      && missing=1
+          [ -z "$ANON" ] && echo "::error::VITE_SUPABASE_ANON_KEY is not set" && missing=1
+          [ "$missing" -eq 1 ] && exit 1
+          echo "Secrets present."
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web app
+        env:
+          # Only the anon key is baked in. It is designed to be public — RLS is
+          # what protects the data. The FASHN and service-role keys live in
+          # Supabase and never touch this build.
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_OPENWEATHER_API_KEY: ${{ secrets.VITE_OPENWEATHER_API_KEY }}
+        run: npm run build
+
+      # npm run build already runs this, but it is repeated explicitly so the
+      # gate is visible as its own red step rather than buried in build output.
+      - name: Verify no server secret reached the bundle
+        run: npm run check-bundle
+
+      - name: Generate Android project
+        run: npx cap add android
+
+      - name: Sync web assets into Android
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: pink-wardrobe/web/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Name the artifact
+        id: name
+        run: echo "stamp=$(date +%Y%m%d-%H%M)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pink-wardrobe-${{ steps.name.outputs.stamp }}
+          path: pink-wardrobe/web/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          {
+            echo "### APK built"
+            echo ""
+            echo "Download it from the **Artifacts** section at the bottom of this"
+            echo "run's page, then open the file on your phone to install."
+            echo ""
+            echo "Android will warn about installing from an unknown source — this"
+            echo "is a debug-signed build, which is expected for a private app."
+            echo ""
+            echo "> Debug builds are signed with a throwaway key that changes each"
+            echo "> run. If a future APK refuses to install over an older one,"
+            echo "> uninstall the old app first."
+          } >> "$GITHUB_STEP_SUMMARY"
