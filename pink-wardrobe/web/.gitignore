@@ -6,3 +6,6 @@ public/mediapipe/
 # build, so the platform folder is disposable.
 android/
 ios/
+
+# Generated from resources/icon.svg by scripts/make-icon.mjs. Committed
+# anyway, because CI needs them and has no SVG rasteriser.

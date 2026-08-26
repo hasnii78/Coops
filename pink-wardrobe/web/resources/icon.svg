@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    Pink Wardrobe app icon: a figure from behind in a fitted red dress.
+
+    Drawn for ~48dp, so the whole thing is one silhouette with three readable
+    beats — hair, shoulders, flared hem. Two earlier attempts failed here:
+    reusing the circle-clipped web logo gave doll proportions, and a plain
+    triangle skirt read as a chess pawn. What fixes it is the waist: hair
+    narrower than the shoulders so the shoulder line shows, then a nip at the
+    waist before the skirt flares.
+
+    The figure sits inside the central safe band, since Android masks icons to
+    a circle, squircle or rounded square depending on the launcher.
+  -->
+  <defs>
+    <linearGradient id="hair" x1="0.3" y1="0" x2="0.7" y2="1">
+      <stop offset="0%" stop-color="#FAE3A6"/>
+      <stop offset="50%" stop-color="#E9C169"/>
+      <stop offset="100%" stop-color="#C2942F"/>
+    </linearGradient>
+
+    <linearGradient id="dress" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0%" stop-color="#E2503F"/>
+      <stop offset="45%" stop-color="#C62828"/>
+      <stop offset="100%" stop-color="#921818"/>
+    </linearGradient>
+
+    <radialGradient id="ground" cx="0.5" cy="0.38" r="0.68">
+      <stop offset="0%" stop-color="#FDF0F4"/>
+      <stop offset="100%" stop-color="#F2B9CC"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#ground)"/>
+
+  <ellipse cx="256" cy="418" rx="104" ry="15" fill="#C97F9C" opacity="0.25"/>
+
+  <!-- Shoulders and upper arms, showing either side of the hair. -->
+  <path d="M256 176
+           c-40 0-68 14-76 34
+           l-12 36 c-3 9 4 16 13 16 h150
+           c9 0 16-7 13-16 l-12-36
+           c-8-20-36-34-76-34z"
+        fill="#E9B994"/>
+
+  <!--
+    The dress in one path: shoulder line, in to the waist, out to the hem.
+    The waist is what makes this read as a dress rather than a cone.
+  -->
+  <path d="M194 190
+           c15-11 37-16 62-16
+           s47 5 62 16
+           l16 92
+           c2 11-3 20-12 26
+           l-11 8
+           33 96
+           c4 13-5 24-19 24
+           H187
+           c-14 0-23-11-19-24
+           l33-96 -11-8
+           c-9-6-14-15-12-26z"
+        fill="url(#dress)"/>
+
+  <!-- Waist seam, thick enough to survive downscaling. -->
+  <path d="M214 300 h84" stroke="#7E1414" stroke-width="8"
+        stroke-linecap="round" opacity="0.42"/>
+
+  <!-- Head, from behind. -->
+  <circle cx="256" cy="146" r="31" fill="#E9B994"/>
+
+  <!--
+    Hair: deliberately narrower than the shoulders and stopping above the
+    waist, so the shoulder line and the dress both stay legible.
+  -->
+  <path d="M256 110
+           c-25 0-40 16-40 37
+           0 19 4 37 10 53
+           2 6 8 10 14 10
+           h32
+           c6 0 12-4 14-10
+           6-16 10-34 10-53
+           0-21-15-37-40-37z"
+        fill="url(#hair)"/>
+
+  <path d="M232 128 c7-10 41-10 48 0 -5-11-14-17-24-17 s-19 6-24 17z"
+        fill="#FFF8E4" opacity="0.42"/>
+</svg>
