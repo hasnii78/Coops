@@ -15,7 +15,8 @@
  * spending a second credit.
  */
 
-import { createClient } from 'jsr:@supabase/supabase-js@2';
+// npm: is the specifier Supabase's Edge Runtime documents for this package.
+import { createClient } from 'npm:@supabase/supabase-js@2';
 
 import { json, preflight } from '../_shared/cors.ts';
 import { ContentBlocked, validateGeneration } from '../_shared/moderation.ts';

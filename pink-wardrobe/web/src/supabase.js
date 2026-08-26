@@ -56,6 +56,8 @@ export async function callFunction(name, payload) {
     // Clone first: the body is a stream and may only be read once.
     const body = await (response.clone?.() ?? response).json();
     message = body?.error || body?.message || '';
+    // `detail` carries the underlying cause when the function knows it.
+    if (body?.detail) message = `${message} (${body.detail})`;
   } catch {
     try {
       message = (await (response.clone?.() ?? response).text())?.slice(0, 300) || '';

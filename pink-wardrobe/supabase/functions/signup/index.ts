@@ -15,7 +15,8 @@
  * a readable directory — there is no table anyone can query to enumerate users.
  */
 
-import { createClient } from 'jsr:@supabase/supabase-js@2';
+// npm: is the specifier Supabase's Edge Runtime documents for this package.
+import { createClient } from 'npm:@supabase/supabase-js@2';
 
 import { json, preflight } from '../_shared/cors.ts';
 
@@ -30,6 +31,25 @@ Deno.serve(async (req: Request) => {
 
   if (req.method === 'OPTIONS') {
     return preflight(origin);
+  }
+
+  // Health check. A function that fails to boot and a function that rejects
+  // your input both surface as "non-2xx" in the client, which makes them
+  // impossible to tell apart. Opening this URL in a browser distinguishes
+  // them: a reply means the function is alive and the problem is the input.
+  if (req.method === 'GET') {
+    return json(
+      {
+        ok: true,
+        function: 'signup',
+        // Confirms the runtime actually has what it needs, without ever
+        // revealing the values.
+        hasServiceRole: Boolean(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')),
+        hasUrl: Boolean(Deno.env.get('SUPABASE_URL')),
+      },
+      200,
+      origin,
+    );
   }
 
   let body: { username?: string; password?: string; displayName?: string };
@@ -76,8 +96,12 @@ Deno.serve(async (req: Request) => {
     if (message.includes('already been registered')) {
       return json({ error: 'That username is taken.' }, 409, origin);
     }
-    console.error('createUser failed', message);
-    return json({ error: 'Could not create the account.' }, 500, origin);
+    console.error('createUser failed:', message);
+    return json(
+      { error: 'Could not create the account.', detail: message.slice(0, 200) },
+      500,
+      origin,
+    );
   }
 
   const { error: profileError } = await admin.from('profiles').insert({
@@ -94,8 +118,15 @@ Deno.serve(async (req: Request) => {
       return json({ error: 'That username is taken.' }, 409, origin);
     }
 
-    console.error('profile insert failed', profileError.message);
-    return json({ error: 'Could not create the account.' }, 500, origin);
+    console.error('profile insert failed:', profileError.message, profileError.code);
+    return json(
+      {
+        error: 'Could not create the account.',
+        detail: `${profileError.code ?? ''} ${profileError.message}`.trim().slice(0, 200),
+      },
+      500,
+      origin,
+    );
   }
 
   return json({ ok: true, username }, 200, origin);
