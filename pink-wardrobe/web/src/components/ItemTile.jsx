@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { resolveUrl } from '../lib/closet';
+import { signedUrl } from '../lib/storage';
 import { IconHeart, IconPin } from './Icons';
 
 const STATUS_COPY = {
@@ -17,11 +17,11 @@ export default function ItemTile({ item, onToggleLike, onTogglePin, onSelect, on
     let active = true;
     // Prefer the finished layer; fall back to the original photo while the
     // pipeline is still running.
-    resolveUrl(item.layerPath || item.photoPath)
+    signedUrl(item.layer_path || item.photo_path)
       .then((next) => { if (active) setUrl(next); })
       .catch(() => {});
     return () => { active = false; };
-  }, [item.layerPath, item.photoPath]);
+  }, [item.layer_path, item.photo_path]);
 
   const busy = ['queued', 'generating', 'processing'].includes(item.status);
 
@@ -50,7 +50,7 @@ export default function ItemTile({ item, onToggleLike, onTogglePin, onSelect, on
       <div className="meta">
         <strong>{item.name}</strong>
         <div className="row-between">
-          <span>{item.wearCount ? `Worn ${item.wearCount}×` : 'Not worn yet'}</span>
+          <span>{item.wear_count ? `Worn ${item.wear_count}×` : 'Not worn yet'}</span>
           <span className="row" style={{ gap: 4 }}>
             <button
               type="button"

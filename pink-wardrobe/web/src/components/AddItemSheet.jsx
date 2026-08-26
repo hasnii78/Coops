@@ -1,6 +1,5 @@
 import { useState } from 'react';
 
-import { useAuth } from '../context/AuthContext';
 import { addItem, addItemsBulk } from '../lib/closet';
 import { CATEGORIES, GENERATION_BLOCKED } from '../lib/constants';
 
@@ -12,7 +11,6 @@ import { CATEGORIES, GENERATION_BLOCKED } from '../lib/constants';
  * so progress is reported item by item and failures don't abort the batch.
  */
 export default function AddItemSheet({ onClose, onAdded }) {
-  const { uid } = useAuth();
   const [files, setFiles] = useState([]);
   const [name, setName] = useState('');
   const [category, setCategory] = useState('tops');
@@ -40,7 +38,7 @@ export default function AddItemSheet({ onClose, onAdded }) {
           price,
         }));
 
-        const results = await addItemsBulk(uid, entries, (done, total) =>
+        const results = await addItemsBulk(entries, (done, total) =>
           setProgress({ done, total }));
 
         const failed = results.filter((result) => !result.ok);
@@ -50,7 +48,7 @@ export default function AddItemSheet({ onClose, onAdded }) {
           return;
         }
       } else {
-        await addItem(uid, { file: files[0], name, category, price });
+        await addItem({ file: files[0], name, category, price });
       }
 
       onAdded?.();

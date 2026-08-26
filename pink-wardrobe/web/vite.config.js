@@ -24,12 +24,19 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Layer PNGs are immutable once written, so they cache aggressively.
-        // This is what makes repeat outfit builds feel instant offline.
-        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+        // The MediaPipe models and WASM runtime are tens of megabytes. Raise
+        // the cap so they are genuinely precached — without this they are
+        // silently skipped and the app has no offline segmentation at all.
+        maximumFileSizeToCacheInBytes: 40 * 1024 * 1024,
+        globPatterns: ['**/*.{js,css,html,svg,png,ico,wasm,tflite,task}'],
         runtimeCaching: [
           {
-            urlPattern: /^https:\/\/firebasestorage\.googleapis\.com\/.*/i,
+            // Signed Storage URLs. The path is stable and the bytes behind a
+            // layer never change once written, so caching on path is safe and
+            // is what makes repeat outfit builds feel instant.
+            urlPattern: ({ url }) =>
+              url.hostname.endsWith('.supabase.co') &&
+              url.pathname.includes('/storage/v1/object/sign/'),
             handler: 'CacheFirst',
             options: {
               cacheName: 'wardrobe-layers',

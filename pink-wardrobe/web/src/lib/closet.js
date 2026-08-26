@@ -1,110 +1,179 @@
 /**
  * Closet data access and the client half of the garment pipeline.
+ *
+ * The cost model, restated because everything here depends on it: the paid
+ * FASHN generation happens once per item, inside the process-garment Edge
+ * Function. Every step in this file after that is free and local.
  */
 
-import {
-  addDoc, collection, deleteDoc, doc, getDoc, getDocs, increment,
-  orderBy, query, serverTimestamp, setDoc, updateDoc, where,
-} from 'firebase/firestore';
-import { getDownloadURL, ref, uploadBytes, deleteObject } from 'firebase/storage';
-import { httpsCallable } from 'firebase/functions';
-
-import { db, functions, storage } from '../firebase';
+import { supabase, callFunction } from '../supabase';
 import { compressImage } from './images';
 import { GENERATION_BLOCKED } from './constants';
+import { BUCKET_LAYERS, BUCKET_WARDROBE, download, remove, upload } from './storage';
+import { alignToMaster, checkAvatarQuality, dominantColor, segmentGarment } from './vision';
 
-const processGarment = httpsCallable(functions, 'process_garment');
-const validateAvatar = httpsCallable(functions, 'validate_avatar');
-const buildOutfit = httpsCallable(functions, 'build_outfit');
-
-/** Resolve a Storage path to an authenticated download URL. */
-export async function resolveUrl(path) {
-  if (!path) return null;
-  return getDownloadURL(ref(storage, path));
+async function requireUserId() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in to continue.');
+  return user.id;
 }
 
 // ---------------------------------------------------------------- avatar
 
-export async function uploadAvatar(uid, file) {
+/**
+ * Upload and lock the master pose template.
+ *
+ * Quality is checked on-device before anything is stored, so a rejected photo
+ * never touches the bucket.
+ */
+export async function uploadAvatar(file) {
+  const userId = await requireUserId();
   const compressed = await compressImage(file, { maxEdge: 1600, quality: 0.9 });
-  const path = `users/${uid}/avatar/master.jpg`;
 
-  await uploadBytes(ref(storage, path), compressed, { contentType: 'image/jpeg' });
+  const { ok, problems, landmarks } = await checkAvatarQuality(compressed);
 
-  // The server decides whether this photo is good enough to become the
-  // permanent master template.
-  const { data } = await validateAvatar({ storagePath: path });
-
-  if (!data.accepted) {
-    await deleteObject(ref(storage, path)).catch(() => {});
+  if (!ok) {
     const error = new Error('That photo will not work as your avatar.');
-    error.problems = data.problems;
+    error.problems = problems;
     throw error;
   }
 
+  const path = `${userId}/avatar/master.jpg`;
+  await upload(BUCKET_WARDROBE, path, compressed, 'image/jpeg');
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({
+      avatar_path: path,
+      avatar_landmarks: landmarks,
+      avatar_locked_at: new Date().toISOString(),
+    })
+    .eq('id', userId);
+
+  if (error) throw error;
   return path;
 }
 
 // ----------------------------------------------------------------- items
 
-export async function addItem(uid, { file, name, category, price, tags = [] }) {
-  if (GENERATION_BLOCKED.includes(category)) {
-    // Catalogue-only categories skip the paid pipeline entirely.
-    const compressed = await compressImage(file);
-    const itemRef = await addDoc(collection(db, 'users', uid, 'items'), {
+export async function listItems({ includeDeleted = false } = {}) {
+  let query = supabase.from('items').select('*').order('created_at', { ascending: false });
+
+  query = includeDeleted ? query.not('deleted_at', 'is', null) : query.is('deleted_at', null);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data ?? [];
+}
+
+/**
+ * Run pipeline steps 4-6 on the device.
+ *
+ * Separated from addItem so a failed or interrupted run can be resumed from
+ * the saved generation without touching FASHN again.
+ */
+export async function finishProcessing(item) {
+  const userId = await requireUserId();
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('avatar_landmarks')
+    .eq('id', userId)
+    .single();
+
+  if (profileError) throw profileError;
+
+  const generationBlob = await download(item.generation_path, BUCKET_WARDROBE);
+
+  // Step 4 — cut the garment out.
+  const cutout = await segmentGarment(generationBlob, item.category);
+
+  // Step 5 — align it to the master template.
+  const { blob: aligned, meta } = await alignToMaster({
+    layerBlob: cutout,
+    generationBlob,
+    masterLandmarks: profile.avatar_landmarks,
+  });
+
+  // Step 6 — save the reusable layer.
+  const layerPath = `${userId}/layers/${item.id}.png`;
+  await upload(BUCKET_LAYERS, layerPath, aligned, 'image/png');
+
+  const color = await dominantColor(aligned);
+
+  const { data, error } = await supabase
+    .from('items')
+    .update({
+      status: 'ready',
+      layer_path: layerPath,
+      alignment: meta,
+      color,
+      processed_at: new Date().toISOString(),
+    })
+    .eq('id', item.id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Add one garment and take it all the way to a reusable layer.
+ *
+ * Steps 1-3 (moderation, FASHN, immediate persist) happen in the Edge
+ * Function. Steps 4-6 happen here.
+ */
+export async function addItem({ file, name, category, price, tags = [] }) {
+  const userId = await requireUserId();
+  const compressed = await compressImage(file);
+
+  const catalogueOnly = GENERATION_BLOCKED.includes(category);
+
+  const { data: item, error } = await supabase
+    .from('items')
+    .insert({
+      user_id: userId,
       name: name?.trim() || 'Untitled',
       category,
       price: Number(price) || 0,
       tags,
-      status: 'catalogued',
-      wearCount: 0,
-      liked: false,
-      pinned: false,
-      createdAt: serverTimestamp(),
-    });
-    const photoPath = `users/${uid}/photos/${itemRef.id}.jpg`;
-    await uploadBytes(ref(storage, photoPath), compressed, { contentType: 'image/jpeg' });
-    await updateDoc(itemRef, { photoPath });
-    return itemRef.id;
+      status: catalogueOnly ? 'catalogued' : 'queued',
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  const photoPath = `${userId}/photos/${item.id}.jpg`;
+  await upload(BUCKET_WARDROBE, photoPath, compressed, 'image/jpeg');
+  await supabase.from('items').update({ photo_path: photoPath }).eq('id', item.id);
+
+  if (catalogueOnly) {
+    // Catalogued-only categories never reach FASHN.
+    return { ...item, photo_path: photoPath };
   }
 
-  const compressed = await compressImage(file);
+  const result = await callFunction('process-garment', { itemId: item.id });
 
-  const itemRef = await addDoc(collection(db, 'users', uid, 'items'), {
-    name: name?.trim() || 'Untitled',
-    category,
-    price: Number(price) || 0,
-    tags,
-    status: 'queued',
-    wearCount: 0,
-    liked: false,
-    pinned: false,
-    createdAt: serverTimestamp(),
-  });
+  if (result.status === 'ready') {
+    return { ...item, layer_path: result.layerPath, status: 'ready' };
+  }
 
-  const photoPath = `users/${uid}/photos/${itemRef.id}.jpg`;
-  await uploadBytes(ref(storage, photoPath), compressed, { contentType: 'image/jpeg' });
-  await updateDoc(itemRef, { photoPath });
-
-  // Fire the paid pipeline. Errors are recorded on the item document by the
-  // function itself, so the UI can surface them without losing the record.
-  await processGarment({ itemId: itemRef.id, category, garmentPath: photoPath });
-
-  return itemRef.id;
+  return finishProcessing({ ...item, generation_path: result.generationPath, category });
 }
 
 /**
- * Bulk upload. Deliberately sequential, not parallel: each item costs a FASHN
- * credit and holds a 2GB function instance, so firing ten at once risks rate
- * limits and concurrent-instance caps for no user-visible gain.
+ * Bulk upload. Deliberately sequential: each item costs a credit, and firing
+ * many at once risks rate limits for no user-visible gain.
  */
-export async function addItemsBulk(uid, entries, onProgress) {
+export async function addItemsBulk(entries, onProgress) {
   const results = [];
 
   for (const [index, entry] of entries.entries()) {
     try {
-      const id = await addItem(uid, entry);
-      results.push({ ok: true, id, name: entry.name });
+      const item = await addItem(entry);
+      results.push({ ok: true, item, name: entry.name });
     } catch (error) {
       results.push({ ok: false, error: error.message, name: entry.name });
     }
@@ -114,132 +183,158 @@ export async function addItemsBulk(uid, entries, onProgress) {
   return results;
 }
 
-export async function listItems(uid) {
-  const snapshot = await getDocs(
-    query(collection(db, 'users', uid, 'items'), orderBy('createdAt', 'desc')),
-  );
-  return snapshot.docs.map((document) => ({ id: document.id, ...document.data() }));
+/** Retry a failed item. Failed FASHN generations are not billed. */
+export async function retryItem(item) {
+  if (item.generation_path) {
+    // The paid step already succeeded — resume for free.
+    return finishProcessing(item);
+  }
+
+  const result = await callFunction('process-garment', { itemId: item.id });
+
+  if (result.status === 'ready') return item;
+  return finishProcessing({ ...item, generation_path: result.generationPath });
 }
 
-export function toggleLike(uid, itemId, liked) {
-  return updateDoc(doc(db, 'users', uid, 'items', itemId), { liked });
-}
+async function patchItem(id, changes) {
+  const { data, error } = await supabase
+    .from('items').update(changes).eq('id', id).select().single();
 
-export function togglePin(uid, itemId, pinned) {
-  return updateDoc(doc(db, 'users', uid, 'items', itemId), { pinned });
-}
-
-export function recordWear(uid, itemId) {
-  // "Worn" implies liked, per the brief.
-  return updateDoc(doc(db, 'users', uid, 'items', itemId), {
-    wearCount: increment(1),
-    lastWornAt: serverTimestamp(),
-    liked: true,
-  });
-}
-
-export function retireItem(uid, itemId, reason = 'donated') {
-  // Retiring keeps outfit history intact, unlike deleting.
-  return updateDoc(doc(db, 'users', uid, 'items', itemId), {
-    retired: true,
-    retiredReason: reason,
-    retiredAt: serverTimestamp(),
-  });
-}
-
-/** Move an item to the recycle bin. Restorable for 15 days, then purged. */
-export async function softDeleteItem(uid, itemId) {
-  const itemRef = doc(db, 'users', uid, 'items', itemId);
-  const snapshot = await getDoc(itemRef);
-  if (!snapshot.exists()) return;
-
-  await setDoc(doc(db, 'users', uid, 'recycleBin', itemId), {
-    ...snapshot.data(),
-    deletedAt: serverTimestamp(),
-  });
-  await deleteDoc(itemRef);
-}
-
-export async function restoreItem(uid, itemId) {
-  const binRef = doc(db, 'users', uid, 'recycleBin', itemId);
-  const snapshot = await getDoc(binRef);
-  if (!snapshot.exists()) return;
-
-  const { deletedAt, ...data } = snapshot.data();
-  await setDoc(doc(db, 'users', uid, 'items', itemId), data);
-  await deleteDoc(binRef);
-}
-
-export async function listRecycleBin(uid) {
-  const snapshot = await getDocs(collection(db, 'users', uid, 'recycleBin'));
-  return snapshot.docs.map((document) => ({ id: document.id, ...document.data() }));
-}
-
-/** Retry a failed generation. Failed FASHN calls are not billed. */
-export function retryItem(uid, item) {
-  return processGarment({
-    itemId: item.id,
-    category: item.category,
-    garmentPath: item.photoPath,
-  });
-}
-
-// ---------------------------------------------------------------- combos
-
-export async function saveCombo(uid, { name, itemIds, compositePath, notes = '' }) {
-  const comboRef = await addDoc(collection(db, 'users', uid, 'combos'), {
-    name: name?.trim() || 'Untitled outfit',
-    itemIds,
-    compositePath,
-    notes,
-    wearCount: 0,
-    liked: false,
-    pinned: false,
-    createdAt: serverTimestamp(),
-  });
-  return comboRef.id;
-}
-
-export async function listCombos(uid) {
-  const snapshot = await getDocs(
-    query(collection(db, 'users', uid, 'combos'), orderBy('createdAt', 'desc')),
-  );
-  return snapshot.docs.map((document) => ({ id: document.id, ...document.data() }));
-}
-
-export async function wearCombo(uid, combo) {
-  await updateDoc(doc(db, 'users', uid, 'combos', combo.id), {
-    wearCount: increment(1),
-    lastWornAt: serverTimestamp(),
-    liked: true,
-  });
-
-  await Promise.all(combo.itemIds.map((itemId) => recordWear(uid, itemId)));
-
-  await addDoc(collection(db, 'users', uid, 'history'), {
-    comboId: combo.id,
-    comboName: combo.name,
-    itemIds: combo.itemIds,
-    wornAt: serverTimestamp(),
-  });
-}
-
-/** Server-side blended composite. Cached by item set, so repeats are free. */
-export async function requestBlendedComposite(itemIds) {
-  const { data } = await buildOutfit({ itemIds });
+  if (error) throw error;
   return data;
 }
 
-export async function listHistory(uid) {
-  const snapshot = await getDocs(
-    query(collection(db, 'users', uid, 'history'), orderBy('wornAt', 'desc')),
+export const toggleLike = (id, liked) => patchItem(id, { liked });
+export const togglePin = (id, pinned) => patchItem(id, { pinned });
+export const setNudge = (id, nudge) => patchItem(id, { nudge });
+
+/** Retiring keeps outfit history intact, unlike deleting. */
+export const retireItem = (id, reason = 'donated') =>
+  patchItem(id, { retired: true, retired_reason: reason });
+
+export async function recordWear(id) {
+  // "Worn" implies liked, per the brief.
+  const { error } = await supabase.rpc('increment_wear', { item_id: id }).then(
+    (result) => result,
+    () => ({ error: true }),
   );
-  return snapshot.docs.map((document) => ({ id: document.id, ...document.data() }));
+
+  if (error) {
+    // No RPC deployed — fall back to a read-modify-write.
+    const { data } = await supabase.from('items').select('wear_count').eq('id', id).single();
+    await patchItem(id, {
+      wear_count: (data?.wear_count ?? 0) + 1,
+      last_worn_at: new Date().toISOString(),
+      liked: true,
+    });
+  }
 }
 
-export async function listWishlist(uid) {
-  const snapshot = await getDocs(
-    query(collection(db, 'users', uid, 'items'), where('wishlist', '==', true)),
-  );
-  return snapshot.docs.map((document) => ({ id: document.id, ...document.data() }));
+/** Move to the recycle bin. Restorable for 15 days, then purged. */
+export const softDeleteItem = (id) => patchItem(id, { deleted_at: new Date().toISOString() });
+
+export const restoreItem = (id) => patchItem(id, { deleted_at: null });
+
+export const listRecycleBin = () => listItems({ includeDeleted: true });
+
+// ---------------------------------------------------------------- combos
+
+export async function saveCombo({ name, itemIds, compositePath = null, notes = '' }) {
+  const userId = await requireUserId();
+
+  const { data, error } = await supabase
+    .from('combos')
+    .insert({
+      user_id: userId,
+      name: name?.trim() || 'Untitled outfit',
+      item_ids: itemIds,
+      composite_path: compositePath,
+      notes,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function listCombos() {
+  const { data, error } = await supabase
+    .from('combos').select('*').order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function patchCombo(id, changes) {
+  const { data, error } = await supabase
+    .from('combos').update(changes).eq('id', id).select().single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function wearCombo(combo) {
+  const userId = await requireUserId();
+
+  await patchCombo(combo.id, {
+    wear_count: (combo.wear_count ?? 0) + 1,
+    last_worn_at: new Date().toISOString(),
+    liked: true,
+  });
+
+  await Promise.all((combo.item_ids ?? []).map((id) => recordWear(id)));
+
+  await supabase.from('wear_history').insert({
+    user_id: userId,
+    combo_id: combo.id,
+    combo_name: combo.name,
+    item_ids: combo.item_ids ?? [],
+  });
+}
+
+export async function listHistory() {
+  const { data, error } = await supabase
+    .from('wear_history').select('*').order('worn_at', { ascending: false });
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function listWishlist() {
+  const { data, error } = await supabase
+    .from('items').select('*').eq('wishlist', true).is('deleted_at', null);
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+// ------------------------------------------------------------ composites
+
+export async function findCachedComposite(comboHash) {
+  const { data } = await supabase
+    .from('composites').select('composite_path').eq('combo_hash', comboHash).maybeSingle();
+
+  return data?.composite_path ?? null;
+}
+
+export async function saveComposite({ comboHash, itemIds, blob }) {
+  const userId = await requireUserId();
+  const path = `${userId}/composites/${comboHash}.png`;
+
+  await upload(BUCKET_LAYERS, path, blob, 'image/png');
+
+  await supabase.from('composites').upsert({
+    user_id: userId,
+    combo_hash: comboHash,
+    item_ids: itemIds,
+    composite_path: path,
+  });
+
+  return path;
+}
+
+/** Delete an item's stored images. Used by the local recycle-bin flow. */
+export async function purgeItemStorage(item) {
+  await remove([item.photo_path, item.generation_path, item.layer_path]);
 }

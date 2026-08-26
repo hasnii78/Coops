@@ -138,9 +138,9 @@ export function staleItems(items, days = STALE_ITEM_DAYS) {
 
   return items.filter((item) => {
     if (item.retired || item.status !== 'ready') return false;
-    const lastWorn = item.lastWornAt?.toMillis?.();
+    const lastWorn = item.last_worn_at ? Date.parse(item.last_worn_at) : null;
     if (!lastWorn) {
-      const created = item.createdAt?.toMillis?.() ?? Date.now();
+      const created = item.created_at ? Date.parse(item.created_at) : Date.now();
       return created < cutoff;
     }
     return lastWorn < cutoff;
@@ -158,7 +158,7 @@ export function findGaps(items) {
 
 export function costPerWear(item) {
   const price = Number(item.price) || 0;
-  const wears = Number(item.wearCount) || 0;
+  const wears = Number(item.wear_count) || 0;
   if (!price) return null;
   return wears === 0 ? price : price / wears;
 }

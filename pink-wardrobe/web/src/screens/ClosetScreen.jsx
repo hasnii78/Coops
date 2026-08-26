@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import EmptyState from '../components/EmptyState';
 import ItemTile from '../components/ItemTile';
@@ -10,7 +10,7 @@ import { listItems, retryItem, toggleLike, togglePin } from '../lib/closet';
 import { staleItems, surpriseMe } from '../lib/suggestions';
 
 export default function ClosetScreen() {
-  const { uid, profile } = useAuth();
+  const { profile } = useAuth();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [category, setCategory] = useState('all');
@@ -18,30 +18,20 @@ export default function ClosetScreen() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [surprise, setSurprise] = useState(null);
+  const [error, setError] = useState(null);
 
-  async function refresh() {
-    if (!uid) return;
-    setLoading(true);
+  const refresh = useCallback(async () => {
     try {
-      setItems(await listItems(uid));
+      setItems(await listItems());
+      setError(null);
+    } catch (caught) {
+      setError(caught.message);
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  useEffect(() => { refresh(); /* eslint-disable-next-line */ }, [uid]);
-
-  // Poll while anything is mid-pipeline so the tile status resolves without a
-  // manual refresh. Stops as soon as nothing is in flight.
-  useEffect(() => {
-    const busy = items.some((item) =>
-      ['queued', 'generating', 'processing'].includes(item.status));
-    if (!busy) return undefined;
-
-    const timer = setInterval(refresh, 4000);
-    return () => clearInterval(timer);
-    /* eslint-disable-next-line */
-  }, [items]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   const visible = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -60,8 +50,16 @@ export default function ClosetScreen() {
   const stale = useMemo(() => staleItems(items), [items]);
 
   function handleSurprise() {
-    const result = surpriseMe(items, { colorProfile: profile?.colorProfile });
-    setSurprise(result);
+    setSurprise(surpriseMe(items, { colorProfile: profile?.color_profile }));
+  }
+
+  async function handleRetry(item) {
+    try {
+      await retryItem(item);
+      await refresh();
+    } catch (caught) {
+      setError(caught.message);
+    }
   }
 
   return (
@@ -91,6 +89,8 @@ export default function ClosetScreen() {
       </header>
 
       <main className="app-main stack">
+        {error ? <div className="error-banner" role="alert">{error}</div> : null}
+
         {searchOpen ? (
           <input
             className="input"
@@ -102,22 +102,13 @@ export default function ClosetScreen() {
         ) : null}
 
         <div className="chip-row" role="group" aria-label="Filter by category">
-          <button
-            type="button"
-            className="chip"
-            aria-pressed={category === 'all'}
-            onClick={() => setCategory('all')}
-          >
+          <button type="button" className="chip" aria-pressed={category === 'all'}
+            onClick={() => setCategory('all')}>
             All
           </button>
           {CATEGORIES.map(({ id, label }) => (
-            <button
-              key={id}
-              type="button"
-              className="chip"
-              aria-pressed={category === id}
-              onClick={() => setCategory(id)}
-            >
+            <button key={id} type="button" className="chip" aria-pressed={category === id}
+              onClick={() => setCategory(id)}>
               {label}
             </button>
           ))}
@@ -156,13 +147,11 @@ export default function ClosetScreen() {
         ) : visible.length === 0 ? (
           <EmptyState
             title={items.length ? 'Nothing matches' : 'Your closet is empty'}
-            action={
-              items.length ? null : (
-                <button type="button" className="btn" onClick={() => setAddOpen(true)}>
-                  Add your first piece
-                </button>
-              )
-            }
+            action={items.length ? null : (
+              <button type="button" className="btn" onClick={() => setAddOpen(true)}>
+                Add your first piece
+              </button>
+            )}
           >
             {items.length
               ? 'Try a different category or search term.'
@@ -174,15 +163,15 @@ export default function ClosetScreen() {
               <ItemTile
                 key={item.id}
                 item={item}
-                onToggleLike={(target, liked) => {
-                  toggleLike(uid, target.id, liked);
+                onToggleLike={async (target, liked) => {
                   setItems((prev) => prev.map((i) => (i.id === target.id ? { ...i, liked } : i)));
+                  await toggleLike(target.id, liked);
                 }}
-                onTogglePin={(target, pinned) => {
-                  togglePin(uid, target.id, pinned);
+                onTogglePin={async (target, pinned) => {
                   setItems((prev) => prev.map((i) => (i.id === target.id ? { ...i, pinned } : i)));
+                  await togglePin(target.id, pinned);
                 }}
-                onRetry={(target) => retryItem(uid, target).then(refresh)}
+                onRetry={handleRetry}
               />
             ))}
           </div>
@@ -190,10 +179,7 @@ export default function ClosetScreen() {
       </main>
 
       {addOpen ? (
-        <AddItemSheet
-          onClose={() => setAddOpen(false)}
-          onAdded={refresh}
-        />
+        <AddItemSheet onClose={() => setAddOpen(false)} onAdded={refresh} />
       ) : null}
     </>
   );

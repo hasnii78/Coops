@@ -1,7 +1,5 @@
 import { useState } from 'react';
-import { doc, updateDoc } from 'firebase/firestore';
-
-import { db } from '../firebase';
+import { supabase } from '../supabase';
 import { useAuth } from '../context/AuthContext';
 import { uploadAvatar } from '../lib/closet';
 import { inspectImage } from '../lib/images';
@@ -20,7 +18,7 @@ const UNDERTONES = [
  * getting it right the first time.
  */
 export default function OnboardingScreen() {
-  const { uid } = useAuth();
+  const { uid, refreshProfile } = useAuth();
   const [step, setStep] = useState('avatar');
   const [busy, setBusy] = useState(false);
   const [problems, setProblems] = useState([]);
@@ -42,7 +40,8 @@ export default function OnboardingScreen() {
         return;
       }
 
-      await uploadAvatar(uid, file);
+      await uploadAvatar(file);
+      await refreshProfile();
       setStep('colors');
     } catch (caught) {
       if (caught.problems) setProblems(caught.problems);
@@ -54,10 +53,12 @@ export default function OnboardingScreen() {
   }
 
   async function finishQuiz() {
-    await updateDoc(doc(db, 'users', uid), {
-      colorProfile: quiz,
-      onboarded: true,
-    });
+    await supabase
+      .from('profiles')
+      .update({ color_profile: quiz, onboarded: true })
+      .eq('id', uid);
+
+    await refreshProfile();
   }
 
   if (step === 'avatar') {

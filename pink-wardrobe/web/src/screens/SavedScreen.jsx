@@ -2,26 +2,29 @@ import { useEffect, useState } from 'react';
 
 import EmptyState from '../components/EmptyState';
 import ItemTile from '../components/ItemTile';
-import { useAuth } from '../context/AuthContext';
-import { listCombos, listItems } from '../lib/closet';
+import { listCombos, listWishlist } from '../lib/closet';
 
 /** Two tabs: saved looks, and a wishlist of items not yet owned. */
 export default function SavedScreen() {
-  const { uid } = useAuth();
   const [tab, setTab] = useState('looks');
   const [combos, setCombos] = useState([]);
   const [wishlist, setWishlist] = useState([]);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (!uid) return;
-    listCombos(uid).then((next) => setCombos(next.filter((combo) => combo.liked)));
-    listItems(uid).then((next) => setWishlist(next.filter((item) => item.wishlist)));
-  }, [uid]);
+    listCombos()
+      .then((all) => setCombos(all.filter((combo) => combo.liked)))
+      .catch((caught) => setError(caught.message));
+
+    listWishlist().then(setWishlist).catch(() => {});
+  }, []);
 
   return (
     <>
       <header className="app-header"><h1>Saved</h1></header>
       <main className="app-main stack">
+        {error ? <div className="error-banner" role="alert">{error}</div> : null}
+
         <div className="chip-row" role="tablist">
           <button type="button" className="chip" role="tab"
             aria-selected={tab === 'looks'} aria-pressed={tab === 'looks'}
@@ -41,7 +44,7 @@ export default function SavedScreen() {
               {combos.map((combo) => (
                 <article key={combo.id} className="card">
                   <strong>{combo.name}</strong>
-                  <div className="muted">{combo.itemIds?.length || 0} pieces</div>
+                  <div className="muted">{combo.item_ids?.length || 0} pieces</div>
                 </article>
               ))}
             </div>

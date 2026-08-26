@@ -1,28 +1,29 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import EmptyState from '../components/EmptyState';
-import SendToSheet from '../components/SendToSheet';
-import { IconHeart, IconPin, IconSend } from '../components/Icons';
-import { useAuth } from '../context/AuthContext';
-import { listCombos, resolveUrl, wearCombo } from '../lib/closet';
-import { doc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { IconHeart, IconPin } from '../components/Icons';
+import { listCombos, patchCombo, wearCombo } from '../lib/closet';
+import { signedUrl } from '../lib/storage';
 
 export default function CombosScreen() {
-  const { uid } = useAuth();
   const navigate = useNavigate();
   const [combos, setCombos] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(null);
+  const [error, setError] = useState(null);
 
-  async function refresh() {
-    if (!uid) return;
-    setLoading(true);
-    try { setCombos(await listCombos(uid)); } finally { setLoading(false); }
-  }
+  const refresh = useCallback(async () => {
+    try {
+      setCombos(await listCombos());
+      setError(null);
+    } catch (caught) {
+      setError(caught.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  useEffect(() => { refresh(); /* eslint-disable-next-line */ }, [uid]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   const pinned = useMemo(() => combos.filter((combo) => combo.pinned), [combos]);
   const rest = useMemo(() => combos.filter((combo) => !combo.pinned), [combos]);
@@ -33,12 +34,12 @@ export default function CombosScreen() {
    * charged.
    */
   function handleRemix(combo) {
-    navigate('/me', { state: { preselectItemIds: combo.itemIds || [] } });
+    navigate('/me', { state: { preselectItemIds: combo.item_ids || [] } });
   }
 
   async function patch(combo, changes) {
-    await updateDoc(doc(db, 'users', uid, 'combos', combo.id), changes);
     setCombos((prev) => prev.map((c) => (c.id === combo.id ? { ...c, ...changes } : c)));
+    await patchCombo(combo.id, changes);
   }
 
   if (loading) {
@@ -54,6 +55,8 @@ export default function CombosScreen() {
     <>
       <header className="app-header"><h1>Combos</h1></header>
       <main className="app-main stack">
+        {error ? <div className="error-banner" role="alert">{error}</div> : null}
+
         {combos.length === 0 ? (
           <EmptyState title="No saved outfits yet">
             Build something on the Me tab and save it. Saved outfits rebuild
@@ -65,8 +68,8 @@ export default function CombosScreen() {
               <section className="stack">
                 <h2 className="section-title">Pinned</h2>
                 {pinned.map((combo) => (
-                  <ComboRow key={combo.id} combo={combo} onPatch={patch} uid={uid}
-                    onWorn={refresh} onRemix={handleRemix} onSend={setSending} />
+                  <ComboRow key={combo.id} combo={combo} onPatch={patch}
+                    onWorn={refresh} onRemix={handleRemix} />
                 ))}
               </section>
             ) : null}
@@ -74,35 +77,23 @@ export default function CombosScreen() {
             <section className="stack">
               <h2 className="section-title">All outfits</h2>
               {rest.map((combo) => (
-                <ComboRow key={combo.id} combo={combo} onPatch={patch} uid={uid}
-                  onWorn={refresh} onRemix={handleRemix} onSend={setSending} />
+                <ComboRow key={combo.id} combo={combo} onPatch={patch}
+                  onWorn={refresh} onRemix={handleRemix} />
               ))}
             </section>
           </>
         )}
       </main>
-
-      {sending ? (
-        <SendToSheet
-          outfitName={sending.name}
-          getBlob={async () => {
-            if (!sending.compositePath) return null;
-            const url = await resolveUrl(sending.compositePath);
-            return (await fetch(url)).blob();
-          }}
-          onClose={() => setSending(null)}
-        />
-      ) : null}
     </>
   );
 }
 
-function ComboRow({ combo, onPatch, uid, onWorn, onRemix, onSend }) {
+function ComboRow({ combo, onPatch, onWorn, onRemix }) {
   const [thumb, setThumb] = useState(null);
 
   useEffect(() => {
-    if (combo.compositePath) resolveUrl(combo.compositePath).then(setThumb).catch(() => {});
-  }, [combo.compositePath]);
+    if (combo.composite_path) signedUrl(combo.composite_path).then(setThumb).catch(() => {});
+  }, [combo.composite_path]);
 
   return (
     <article className="card row" style={{ gap: 'var(--space-3)' }}>
@@ -116,8 +107,8 @@ function ComboRow({ combo, onPatch, uid, onWorn, onRemix, onSend }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <strong style={{ display: 'block' }}>{combo.name}</strong>
         <span className="muted">
-          {combo.wearCount ? `Worn ${combo.wearCount}×` : 'Not worn yet'}
-          {combo.itemIds?.length ? ` · ${combo.itemIds.length} pieces` : ''}
+          {combo.wear_count ? `Worn ${combo.wear_count}×` : 'Not worn yet'}
+          {combo.item_ids?.length ? ` · ${combo.item_ids.length} pieces` : ''}
         </span>
         {combo.notes ? <div className="muted" style={{ marginTop: 4 }}>{combo.notes}</div> : null}
       </div>
@@ -135,16 +126,11 @@ function ComboRow({ combo, onPatch, uid, onWorn, onRemix, onSend }) {
           style={{ background: 'none', border: 'none', padding: 6, color: combo.pinned ? 'var(--c-400)' : 'var(--muted)' }}>
           <IconPin filled={combo.pinned} width={18} height={18} />
         </button>
-        <button type="button" className="chip"
-          onClick={() => wearCombo(uid, combo).then(onWorn)}>
+        <button type="button" className="chip" onClick={() => wearCombo(combo).then(onWorn)}>
           Worn
         </button>
         <button type="button" className="chip" onClick={() => onRemix?.(combo)}>
           Remix
-        </button>
-        <button type="button" className="chip" aria-label={`Send ${combo.name} to someone`}
-          disabled={!combo.compositePath} onClick={() => onSend?.(combo)}>
-          <IconSend width={14} height={14} />
         </button>
       </div>
     </article>

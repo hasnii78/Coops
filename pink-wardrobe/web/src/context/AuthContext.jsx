@@ -1,48 +1,83 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { onAuthStateChanged } from 'firebase/auth';
-import { doc, onSnapshot } from 'firebase/firestore';
 
-import { auth, db } from '../firebase';
+import { supabase } from '../supabase';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
+  const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => onAuthStateChanged(auth, (next) => {
-    setUser(next);
-    if (!next) {
-      setProfile(null);
-      setLoading(false);
-    }
-  }), []);
-
-  // Live-subscribe to the profile so theme, text size and avatar changes
-  // propagate immediately, including across the user's other devices.
   useEffect(() => {
-    if (!user) return undefined;
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      if (!data.session) setLoading(false);
+    });
 
-    return onSnapshot(
-      doc(db, 'users', user.uid),
-      (snapshot) => {
-        setProfile(snapshot.exists() ? { uid: user.uid, ...snapshot.data() } : null);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, next) => {
+      setSession(next);
+      if (!next) {
+        setProfile(null);
         setLoading(false);
-      },
-      () => setLoading(false),
-    );
-  }, [user]);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const userId = session?.user?.id ?? null;
+
+  // Load the profile, then subscribe so theme and text-size changes propagate
+  // across the user's devices without a refresh.
+  useEffect(() => {
+    if (!userId) return undefined;
+
+    let active = true;
+
+    async function load() {
+      const { data } = await supabase
+        .from('profiles').select('*').eq('id', userId).maybeSingle();
+
+      if (active) {
+        setProfile(data ?? null);
+        setLoading(false);
+      }
+    }
+
+    load();
+
+    const channel = supabase
+      .channel(`profile:${userId}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${userId}` },
+        (payload) => { if (active) setProfile(payload.new); },
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [userId]);
 
   const value = useMemo(
     () => ({
-      user,
+      session,
+      user: session?.user ?? null,
+      uid: userId,
       profile,
       loading,
-      uid: user?.uid ?? null,
-      hasAvatar: Boolean(profile?.avatar?.storagePath),
+      hasAvatar: Boolean(profile?.avatar_path && profile?.avatar_landmarks),
+      refreshProfile: async () => {
+        if (!userId) return;
+        const { data } = await supabase
+          .from('profiles').select('*').eq('id', userId).maybeSingle();
+        setProfile(data ?? null);
+      },
     }),
-    [user, profile, loading],
+    [session, userId, profile, loading],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

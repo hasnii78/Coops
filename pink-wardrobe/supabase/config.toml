@@ -1,0 +1,45 @@
+project_id = "pink-wardrobe"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[storage]
+enabled = true
+file_size_limit = "8MiB"
+
+[auth]
+enabled = true
+# The APK runs on a capacitor:// origin; localhost covers the dev server.
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["capacitor://localhost", "https://localhost"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+
+# Usernames map to synthetic, undeliverable addresses, so there is nothing to
+# confirm and no mail to send. Signup happens through the signup Edge Function
+# using the service role, not through the public endpoint.
+enable_signup = false
+
+[auth.email]
+enable_signup = false
+enable_confirmations = false
+double_confirm_changes = false
+
+[functions.process-garment]
+# FASHN generation plus polling runs long; the default 60s would cut it off.
+verify_jwt = true
+
+[functions.signup]
+# Must be reachable before the caller has a session.
+verify_jwt = false
+
+[functions.purge-recycle-bin]
+# Authenticated by the x-purge-secret header, not a user session.
+verify_jwt = false

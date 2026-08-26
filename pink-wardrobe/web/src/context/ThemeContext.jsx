@@ -1,7 +1,6 @@
 import { createContext, useContext, useEffect } from 'react';
-import { doc, updateDoc } from 'firebase/firestore';
 
-import { db } from '../firebase';
+import { supabase } from '../supabase';
 import { useAuth } from './AuthContext';
 
 const ThemeContext = createContext(null);
@@ -10,14 +9,14 @@ const ThemeContext = createContext(null);
  * Applies theme, text size and dark mode as attributes on <html>.
  *
  * All three are pure CSS custom-property switches, so changing any of them
- * re-themes the entire app instantly with no component re-render.
+ * re-themes the whole app instantly with no component re-render.
  */
 export function ThemeProvider({ children }) {
-  const { uid, profile } = useAuth();
+  const { uid, profile, refreshProfile } = useAuth();
 
   const theme = profile?.theme || 'pink';
-  const textSize = profile?.textSize || 'medium';
-  const darkMode = profile?.darkMode ?? false;
+  const textSize = profile?.text_size || 'medium';
+  const darkMode = profile?.dark_mode ?? false;
 
   useEffect(() => {
     const root = document.documentElement;
@@ -28,7 +27,8 @@ export function ThemeProvider({ children }) {
 
   async function update(patch) {
     if (!uid) return;
-    await updateDoc(doc(db, 'users', uid), patch);
+    await supabase.from('profiles').update(patch).eq('id', uid);
+    await refreshProfile();
   }
 
   return (
@@ -38,8 +38,8 @@ export function ThemeProvider({ children }) {
         textSize,
         darkMode,
         setTheme: (next) => update({ theme: next }),
-        setTextSize: (next) => update({ textSize: next }),
-        setDarkMode: (next) => update({ darkMode: next }),
+        setTextSize: (next) => update({ text_size: next }),
+        setDarkMode: (next) => update({ dark_mode: next }),
       }}
     >
       {children}

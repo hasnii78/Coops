@@ -1,10 +1,8 @@
-import { useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
 import BottomNav from './components/BottomNav';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
-import { registerForPush } from './lib/notifications';
 
 import AuthScreen from './screens/AuthScreen';
 import OnboardingScreen from './screens/OnboardingScreen';
@@ -12,15 +10,10 @@ import ClosetScreen from './screens/ClosetScreen';
 import CombosScreen from './screens/CombosScreen';
 import MeScreen from './screens/MeScreen';
 import SavedScreen from './screens/SavedScreen';
-import InboxScreen from './screens/InboxScreen';
 import ProfileScreen from './screens/ProfileScreen';
 
 function Gate() {
-  const { user, profile, loading, uid, hasAvatar } = useAuth();
-
-  useEffect(() => {
-    if (uid) registerForPush(uid);
-  }, [uid]);
+  const { user, profile, loading, hasAvatar } = useAuth();
 
   if (loading) {
     return (
@@ -43,7 +36,6 @@ function Gate() {
         <Route path="/combos" element={<CombosScreen />} />
         <Route path="/me" element={<MeScreen />} />
         <Route path="/saved" element={<SavedScreen />} />
-        <Route path="/inbox" element={<InboxScreen />} />
         <Route path="/profile" element={<ProfileScreen />} />
         <Route path="*" element={<Navigate to="/closet" replace />} />
       </Routes>

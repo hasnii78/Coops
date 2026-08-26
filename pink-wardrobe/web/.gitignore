@@ -1,0 +1,3 @@
+# MediaPipe models and WASM runtime are fetched/copied at build time by
+# scripts/fetch-models.mjs. They are ~55MB of binary and do not belong in git.
+public/mediapipe/

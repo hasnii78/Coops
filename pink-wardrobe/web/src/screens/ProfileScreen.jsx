@@ -1,36 +1,35 @@
 import { useEffect, useMemo, useState } from 'react';
-import { doc, updateDoc } from 'firebase/firestore';
 
 import Logo from '../assets/Logo';
-import { db } from '../firebase';
+import { supabase } from '../supabase';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { THEMES, TEXT_SIZES } from '../lib/constants';
 import { listItems, listRecycleBin, restoreItem } from '../lib/closet';
 import { costPerWear, findGaps } from '../lib/suggestions';
-import { signOut } from '../lib/usernameAuth';
+import { signOut } from '../lib/auth';
 
 export default function ProfileScreen() {
-  const { uid, profile } = useAuth();
+  const { uid, profile, refreshProfile } = useAuth();
   const { theme, setTheme, textSize, setTextSize, darkMode, setDarkMode } = useTheme();
 
   const [items, setItems] = useState([]);
   const [bin, setBin] = useState([]);
   const [panel, setPanel] = useState(null);
-  const [displayName, setDisplayName] = useState(profile?.displayName || '');
+  const [displayName, setDisplayName] = useState('');
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (!uid) return;
-    listItems(uid).then(setItems);
-    listRecycleBin(uid).then(setBin);
-  }, [uid]);
+    listItems().then(setItems).catch((caught) => setError(caught.message));
+    listRecycleBin().then(setBin).catch(() => {});
+  }, []);
 
-  useEffect(() => { setDisplayName(profile?.displayName || ''); }, [profile?.displayName]);
+  useEffect(() => { setDisplayName(profile?.display_name || ''); }, [profile?.display_name]);
 
   const stats = useMemo(() => {
     const active = items.filter((item) => !item.retired);
-    const mostWorn = [...active].sort((a, b) => (b.wearCount || 0) - (a.wearCount || 0))[0];
-    const neverWorn = active.filter((item) => !item.wearCount).length;
+    const mostWorn = [...active].sort((a, b) => (b.wear_count || 0) - (a.wear_count || 0))[0];
+    const neverWorn = active.filter((item) => !item.wear_count).length;
 
     const colorCounts = {};
     for (const item of active) {
@@ -42,15 +41,22 @@ export default function ProfileScreen() {
     return { mostWorn, neverWorn, topColor, total: active.length, gaps: findGaps(active) };
   }, [items]);
 
+  async function saveDisplayName() {
+    await supabase.from('profiles').update({ display_name: displayName.trim() }).eq('id', uid);
+    await refreshProfile();
+  }
+
   return (
     <>
       <header className="app-header"><h1>Profile</h1></header>
       <main className="app-main stack">
+        {error ? <div className="error-banner" role="alert">{error}</div> : null}
+
         <div className="card row" style={{ gap: 'var(--space-4)' }}>
           <Logo size={56} />
           <div>
             <strong style={{ display: 'block', fontSize: 'var(--text-lg)' }}>
-              {profile?.displayName || profile?.username}
+              {profile?.display_name || profile?.username}
             </strong>
             <span className="muted">@{profile?.username}</span>
           </div>
@@ -59,38 +65,28 @@ export default function ProfileScreen() {
         <section className="card stack">
           <h2 className="section-title">Closet stats</h2>
           <div className="row-between"><span>Pieces</span><strong>{stats.total}</strong></div>
-          <div className="row-between">
-            <span>Most worn</span>
-            <strong>{stats.mostWorn?.name || '—'}</strong>
-          </div>
-          <div className="row-between">
-            <span>Top colour</span><strong>{stats.topColor || '—'}</strong>
-          </div>
-          <div className="row-between">
-            <span>Never worn</span><strong>{stats.neverWorn}</strong>
-          </div>
+          <div className="row-between"><span>Most worn</span><strong>{stats.mostWorn?.name || '—'}</strong></div>
+          <div className="row-between"><span>Top colour</span><strong>{stats.topColor || '—'}</strong></div>
+          <div className="row-between"><span>Never worn</span><strong>{stats.neverWorn}</strong></div>
           {stats.gaps.length ? (
-            <div className="muted">
-              Fill the gap: you have nothing in {stats.gaps.join(', ')}.
-            </div>
+            <div className="muted">Fill the gap: you have nothing in {stats.gaps.join(', ')}.</div>
           ) : null}
         </section>
 
         <section className="card stack">
           <h2 className="section-title">Cost per wear</h2>
-          {items.filter((item) => item.price).length === 0 ? (
+          {items.filter((item) => Number(item.price)).length === 0 ? (
             <span className="muted">Add prices to your items to track this.</span>
           ) : (
             items
-              .filter((item) => item.price)
+              .filter((item) => Number(item.price))
               .sort((a, b) => (costPerWear(b) || 0) - (costPerWear(a) || 0))
               .slice(0, 8)
               .map((item) => (
                 <div key={item.id} className="row-between">
                   <span>{item.name}</span>
                   <strong>
-                    {costPerWear(item)?.toFixed(2)}
-                    <span className="muted"> / wear</span>
+                    {costPerWear(item)?.toFixed(2)}<span className="muted"> / wear</span>
                   </strong>
                 </div>
               ))
@@ -109,7 +105,7 @@ export default function ProfileScreen() {
               <span className="section-title">Display name</span>
               <input className="input" value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
-                onBlur={() => updateDoc(doc(db, 'users', uid), { displayName: displayName.trim() })} />
+                onBlur={saveDisplayName} />
             </label>
 
             <span className="section-title">Text size</span>
@@ -160,7 +156,7 @@ export default function ProfileScreen() {
                 <div key={item.id} className="row-between">
                   <span>{item.name}</span>
                   <button type="button" className="chip"
-                    onClick={() => restoreItem(uid, item.id).then(() =>
+                    onClick={() => restoreItem(item.id).then(() =>
                       setBin((prev) => prev.filter((b) => b.id !== item.id)))}>
                     Restore
                   </button>

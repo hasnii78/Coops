@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 import Logo from '../assets/Logo';
-import { signIn, signUp, validateUsername } from '../lib/usernameAuth';
+import { signIn, signUp, validateUsername } from '../lib/auth';
 
 /**
  * Username + password only. There is deliberately no email field anywhere —
