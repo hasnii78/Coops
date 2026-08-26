@@ -1,0 +1,106 @@
+rules_version = '2';
+
+// Pink Wardrobe — Firestore security rules.
+//
+// Default posture: deny everything. Each collection below opts in explicitly.
+// The only publicly readable data in the entire database is the `usernames`
+// directory, which exists solely so users can find each other by username.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // ---------------------------------------------------------------
+    // Username directory — the sole public-read exception.
+    // Contains ONLY { username, uid }. Never avatar, closet or profile data.
+    // ---------------------------------------------------------------
+    match /usernames/{username} {
+      allow read: if true;
+
+      // Claim a username: only for yourself, only if unclaimed, and the
+      // document may contain nothing beyond the two permitted keys.
+      allow create: if signedIn()
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.username == username
+                    && request.resource.data.keys().hasOnly(['username', 'uid']);
+
+      // Usernames are immutable once claimed. Releasing one is owner-only.
+      allow update: if false;
+      allow delete: if isOwner(resource.data.uid);
+    }
+
+    // ---------------------------------------------------------------
+    // Per-user private data. Owner-only, no exceptions.
+    // ---------------------------------------------------------------
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+
+      // Avatar record: the master pose template. Written by the client on
+      // upload, then enriched with landmarks by the Cloud Function (admin
+      // SDK bypasses these rules).
+      match /avatar/{docId} {
+        allow read, write: if isOwner(uid);
+      }
+
+      // Closet items, generated layers, saved combos, wishlist, history,
+      // recycle bin — all strictly owner-scoped.
+      match /{subcollection}/{docId} {
+        allow read, write: if isOwner(uid);
+      }
+
+      match /{subcollection}/{docId}/{rest=**} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // Chat. A conversation is readable only by its two participants.
+    // Conversation IDs are the two uids sorted and joined, so membership
+    // is verifiable from the document itself.
+    // ---------------------------------------------------------------
+    match /conversations/{conversationId} {
+
+      function isParticipant() {
+        return signedIn()
+               && request.auth.uid in resource.data.participants;
+      }
+
+      function joiningAsParticipant() {
+        return signedIn()
+               && request.auth.uid in request.resource.data.participants
+               && request.resource.data.participants.size() == 2;
+      }
+
+      allow read: if isParticipant();
+      allow create: if joiningAsParticipant();
+      // Participants may never be rewritten — that would let someone add
+      // themselves to a stranger's conversation.
+      allow update: if isParticipant()
+                    && request.resource.data.participants == resource.data.participants;
+      allow delete: if false;
+
+      match /messages/{messageId} {
+
+        function inParentConversation() {
+          return signedIn() && request.auth.uid in
+            get(/databases/$(database)/documents/conversations/$(conversationId))
+              .data.participants;
+        }
+
+        allow read: if inParentConversation();
+        allow create: if inParentConversation()
+                      && request.resource.data.senderId == request.auth.uid;
+        // Messages are immutable; only the sender may retract one.
+        allow update: if false;
+        allow delete: if signedIn() && resource.data.senderId == request.auth.uid;
+      }
+    }
+  }
+}
