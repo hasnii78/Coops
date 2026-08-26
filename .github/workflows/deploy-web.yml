@@ -4,10 +4,15 @@ name: Deploy web app
 # without rebuilding and reinstalling the APK. Same code, same Supabase project
 # — only the shell differs.
 #
-# Requires the repository to be public (GitHub Pages does not serve private
-# repositories on free accounts). This publishes nothing the APK does not
-# already contain: the bundle and the publishable key ship inside every APK.
-# User data is protected by RLS and private buckets, not by hiding this.
+# Two one-time prerequisites:
+#   1. The repository must be public — Pages does not serve private
+#      repositories on free accounts.
+#   2. Settings -> Pages -> Source must be set to "GitHub Actions". The token
+#      here cannot create the Pages site itself.
+#
+# This publishes nothing the APK does not already contain: the bundle and the
+# publishable key ship inside every APK. User data is protected by RLS and
+# private buckets, not by hiding this.
 
 on:
   push:
@@ -43,13 +48,16 @@ jobs:
           cache: npm
           cache-dependency-path: pink-wardrobe/web/package-lock.json
 
-      # enablement turns Pages on via the API if it is off, so this works
-      # without anyone visiting the settings page.
+      # No `enablement: true` here. That option asks the API to create the
+      # Pages site, and the Actions token is not permitted to do so — it fails
+      # with "Resource not accessible by integration" whether the repository is
+      # public or private. Pages must be switched on once by hand:
+      #   Settings -> Pages -> Source: GitHub Actions
+      # After that this step just reads the configuration, and every later
+      # deploy is automatic.
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Check required secrets
         env:
