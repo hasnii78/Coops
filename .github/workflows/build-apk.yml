@@ -1,14 +1,14 @@
 name: Build Android APK
 
-# Builds an installable APK entirely on GitHub — no Android Studio, no laptop.
+# Builds an installable APK entirely on GitHub.
 #
-# Trigger it from the Actions tab, then download the APK from the run's
-# Artifacts section on your phone and open it to install.
+# OPTIONAL AND DORMANT. The project builds in Android Studio by hand — see
+# docs/LOCAL_SETUP.md, which is the supported route. This workflow never runs on
+# its own; it needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY as repository
+# secrets. Safe to delete if you never want it.
 
 on:
   workflow_dispatch:
-  push:
-    tags: ['v*']
 
 jobs:
   build:

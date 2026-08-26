@@ -40,6 +40,10 @@ Everything FASHN-related is confined to that one file.
 
 ---
 
+> **Looking for the step-by-step?** [LOCAL_SETUP.md](LOCAL_SETUP.md) is the
+> supported route: Supabase CLI for the backend, Android Studio for the APK.
+> The sections below are reference for what each piece does and why.
+
 ## What to configure in the Supabase dashboard
 
 ### 1. Create the project

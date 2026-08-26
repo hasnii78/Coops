@@ -104,8 +104,12 @@ cp .env.example web/.env.local     # fill in URL + anon key
 cd web && npm install && npm run dev
 ```
 
-Full setup — what to configure in the Supabase dashboard, and the known risks —
-is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+**Setting up for the first time?** Follow
+[docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md) start to finish — it covers the
+database, the Edge Functions and the APK build in the order they need doing.
+
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) covers the known risks and what has
+and has not been verified. Read it before your first real garment.
 
 ## Status
 

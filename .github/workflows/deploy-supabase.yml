@@ -2,15 +2,15 @@ name: Deploy Supabase
 
 # Deploys the Edge Functions, and optionally pushes migrations.
 #
-# Runs on any push that touches the supabase directory, and can be triggered by
-# hand from the Actions tab — which is the phone-friendly way to redeploy.
+# OPTIONAL AND DORMANT. The project deploys with the Supabase CLI by hand — see
+# docs/LOCAL_SETUP.md, which is the supported route. This workflow exists only
+# as an alternative and never runs on its own: it is manual-dispatch only, so it
+# cannot fail in the background when the repository secrets are absent.
+#
+# To use it, add SUPABASE_ACCESS_TOKEN and SUPABASE_PROJECT_REF as repository
+# secrets. Otherwise it is safe to delete this file.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'pink-wardrobe/supabase/**'
-      - '.github/workflows/deploy-supabase.yml'
   workflow_dispatch:
     inputs:
       push_migrations:
