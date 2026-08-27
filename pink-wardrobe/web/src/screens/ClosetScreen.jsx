@@ -3,10 +3,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import EmptyState from '../components/EmptyState';
 import ItemTile from '../components/ItemTile';
 import AddItemSheet from '../components/AddItemSheet';
+import ItemSheet from '../components/ItemSheet';
 import { IconPlus, IconSearch } from '../components/Icons';
 import { useAuth } from '../context/AuthContext';
 import { CATEGORIES } from '../lib/constants';
-import { listItems, retryItem, toggleLike, togglePin } from '../lib/closet';
+import {
+  listItems, restoreItem, retryItem, softDeleteItem, toggleLike, togglePin,
+} from '../lib/closet';
 import { staleItems, surpriseMe } from '../lib/suggestions';
 
 export default function ClosetScreen() {
@@ -19,6 +22,8 @@ export default function ClosetScreen() {
   const [addOpen, setAddOpen] = useState(false);
   const [surprise, setSurprise] = useState(null);
   const [error, setError] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [undo, setUndo] = useState(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -51,6 +56,40 @@ export default function ClosetScreen() {
 
   function handleSurprise() {
     setSurprise(surpriseMe(items, { colorProfile: profile?.color_profile }));
+  }
+
+  // The undo offer expires on its own, so a deletion the wearer meant to keep
+  // does not leave a banner sitting there forever.
+  useEffect(() => {
+    if (!undo) return undefined;
+    const timer = setTimeout(() => setUndo(null), 8000);
+    return () => clearTimeout(timer);
+  }, [undo]);
+
+  async function handleDelete(item) {
+    setDetail(null);
+    setItems((prev) => prev.filter((current) => current.id !== item.id));
+
+    try {
+      await softDeleteItem(item.id);
+      setUndo(item);
+    } catch (caught) {
+      setError(caught.message);
+      await refresh();
+    }
+  }
+
+  async function handleUndo() {
+    const item = undo;
+    setUndo(null);
+
+    try {
+      await restoreItem(item.id);
+    } catch (caught) {
+      setError(caught.message);
+    } finally {
+      await refresh();
+    }
   }
 
   async function handleRetry(item) {
@@ -172,6 +211,7 @@ export default function ClosetScreen() {
                   await togglePin(target.id, pinned);
                 }}
                 onRetry={handleRetry}
+                onSelect={setDetail}
               />
             ))}
           </div>
@@ -180,6 +220,17 @@ export default function ClosetScreen() {
 
       {addOpen ? (
         <AddItemSheet onClose={() => setAddOpen(false)} onAdded={refresh} />
+      ) : null}
+
+      {detail ? (
+        <ItemSheet item={detail} onClose={() => setDetail(null)} onDelete={handleDelete} />
+      ) : null}
+
+      {undo ? (
+        <div className="undo-toast" role="status">
+          <span>Moved {undo.name} to the recycle bin.</span>
+          <button type="button" onClick={handleUndo}>Undo</button>
+        </div>
       ) : null}
     </>
   );

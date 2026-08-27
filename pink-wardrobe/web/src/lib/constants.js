@@ -15,23 +15,6 @@ export const CATEGORY_LABELS = Object.fromEntries(
   CATEGORIES.map(({ id, label }) => [id, label]),
 );
 
-/**
- * Paint order for stacked layers. Mirrors Z_ORDER in functions/pipeline/blend.py
- * — if you change one, change the other or previews will disagree with the
- * server-blended result.
- */
-export const Z_ORDER = [
-  'bottoms',
-  'dresses',
-  'swimwear',
-  'gym_wear',
-  'tops',
-  'outerwear',
-  'shoes',
-  'accessories',
-  'undergarments',
-];
-
 /** Categories that cannot be generated onto the avatar on their own. */
 export const GENERATION_BLOCKED = ['undergarments'];
 

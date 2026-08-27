@@ -12,23 +12,36 @@
  * costs milliseconds rather than a server round-trip.
  */
 
-import { Z_ORDER } from './constants';
-
 const SEAM_BAND_PX = 12;
 
-function zIndex(category) {
-  const index = Z_ORDER.indexOf(category);
-  return index === -1 ? Z_ORDER.length : index;
+/**
+ * Which group a layer stacks in: pinned under everything, ordered with the
+ * rest, or pinned over everything.
+ *
+ * Accessories are the reason this exists. A necklace or a belt has no sensible
+ * place in a sequence of garments — it is simply on top of them or beneath
+ * them — so it is pinned rather than numbered.
+ */
+function pinRank(layer) {
+  if (layer.pin === 'under') return -1;
+  if (layer.pin === 'top') return 1;
+  return 0;
 }
 
 /**
- * Stable identifier for a set of items, order-independent.
+ * Stable identifier for an outfit — the same items in the same arrangement.
  *
  * Used as the composite cache key, so reopening a previously built outfit
  * serves the saved render instead of recomputing it.
+ *
+ * Deliberately NOT order-independent. It used to be, back when a fixed table
+ * decided the stacking and the same items could only ever produce one image.
+ * Now that the wearer's picking order sets the stack, a shirt over jeans and a
+ * shirt tucked into them are the same two items and two different pictures, so
+ * both the sequence and the accessory pins have to be in the key.
  */
-export async function comboHash(itemIds) {
-  const joined = [...itemIds].sort().join('|');
+export async function comboHash(itemIds, pins = {}) {
+  const joined = itemIds.map((id) => `${id}:${pins[id] || ''}`).join('|');
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(joined));
 
   return Array.from(new Uint8Array(digest))
@@ -50,8 +63,15 @@ function loadImage(url) {
 /**
  * Paint the avatar plus its layers onto a canvas.
  *
- * `layers` is [{ category, url, nudge }]. Order in the array is irrelevant —
- * z-order is enforced here so callers cannot get it wrong.
+ * `layers` is [{ category, url, nudge, order, pin }], painted in ascending
+ * `order` — the sequence the wearer picked them in. Picking a swimsuit and then
+ * jeans puts the jeans over the swimsuit's hip, which reads as tucked in;
+ * picking the jeans first and a shirt second leaves the shirt out over them.
+ * A fixed table of categories cannot express that difference, because it is a
+ * choice about the outfit rather than a fact about the garments.
+ *
+ * `pin` overrides `order` for accessories: 'under' below everything, 'top'
+ * above everything.
  */
 export async function compositeToCanvas(canvas, avatarUrl, layers, { blendSeams = true } = {}) {
   const avatar = await loadImage(avatarUrl);
@@ -64,7 +84,9 @@ export async function compositeToCanvas(canvas, avatarUrl, layers, { blendSeams 
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.drawImage(avatar, 0, 0);
 
-  const ordered = [...layers].sort((a, b) => zIndex(a.category) - zIndex(b.category));
+  const ordered = [...layers].sort(
+    (a, b) => pinRank(a) - pinRank(b) || (a.order ?? 0) - (b.order ?? 0),
+  );
 
   // Load in parallel, paint in order — otherwise a slow layer reorders the stack.
   const loaded = await Promise.all(

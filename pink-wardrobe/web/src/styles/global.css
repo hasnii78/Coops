@@ -189,6 +189,38 @@ button { font: inherit; color: inherit; cursor: pointer; }
   color: #fff;
 }
 
+/* A chip and its pin control travel together when the row scrolls. */
+.chip-group {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The stacking number, read left of the name like a step in a sequence. */
+.chip-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.28);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.chip-pin {
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
 /* ------------------------------------------------------------- closet grid */
 
 .closet-grid {
@@ -337,6 +369,86 @@ button { font: inherit; color: inherit; cursor: pointer; }
   display: block;
 }
 
+/* ----------------------------------------------------------- outfit viewer */
+
+.viewer {
+  position: relative;
+  width: 100%;
+  max-width: 320px;
+  margin: 0 auto;
+}
+
+.viewer-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--c-50);
+  touch-action: none;
+}
+
+.viewer-content {
+  width: 100%;
+  height: 100%;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.viewer-content > * {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.viewer-expand {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.viewer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: #0b0b0d;
+}
+
+.viewer-stage-full {
+  width: 100%;
+  max-width: min(100%, 78vh);
+  aspect-ratio: 3 / 4;
+  background: transparent;
+  border-radius: var(--radius-md);
+}
+
+.viewer-controls {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.viewer-hint {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
 .accordion {
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -427,4 +539,34 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 :root[data-dark='true'] .error-banner {
   background: #3D1414; border-color: #6B2020; color: #F5C2BC;
+}
+
+/* --------------------------------------------------------------- undo toast */
+
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Clears the bottom nav, matching how .app-main pads itself for it. */
+  bottom: calc(var(--tap-target) + var(--space-4) + env(safe-area-inset-bottom));
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  max-width: min(92vw, 460px);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--c-900);
+  color: #fff;
+  font-size: var(--text-sm);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 25%);
+}
+
+.undo-toast button {
+  border: none;
+  background: none;
+  color: var(--c-200);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  text-decoration: underline;
 }

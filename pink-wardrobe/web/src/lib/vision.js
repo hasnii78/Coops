@@ -19,6 +19,14 @@ import {
   PoseLandmarker,
 } from '@mediapipe/tasks-vision';
 
+import {
+  ERODE_RADIUS,
+  erodeMask,
+  featherEdges,
+  fillEnclosedHoles,
+  keepAnchoredComponents,
+} from './mask';
+
 // Models are served from the app itself so the APK works offline. See
 // scripts/fetch-models.mjs, which downloads them at build time.
 const WASM_PATH = '/mediapipe/wasm';
@@ -206,13 +214,6 @@ export async function checkAvatarQuality(blob) {
 // ---------------------------------------------------------- segmentation
 
 /**
- * Cut the garment out of a generated image.
- *
- * Returns a transparent PNG containing only clothing pixels. Accessories are
- * included for the accessory category and excluded otherwise, so a necklace
- * does not ride along with every shirt.
- */
-/**
  * Vertical extent each category occupies, as fractions between named
  * landmarks. A garment is cut to its own band so it cannot carry another
  * garment along with it — a top that keeps every clothing pixel also keeps
@@ -245,8 +246,7 @@ function midpointY(points, a, b) {
  * Returns null when the landmarks needed are missing, in which case the caller
  * falls back to keeping the whole height rather than cutting blindly.
  */
-function bandBounds(category, landmarks) {
-  const band = BANDS[category];
+function resolveBand(band, landmarks) {
   if (!band || !landmarks) return null;
 
   const p = landmarks.points;
@@ -275,6 +275,16 @@ function bandBounds(category, landmarks) {
     top: Math.max(0, resolve(band.from)),
     bottom: Math.min(landmarks.height, resolve(band.to)),
   };
+}
+
+/** How far this category's garment may extend. */
+function bandBounds(category, landmarks) {
+  return resolveBand(BANDS[category], landmarks);
+}
+
+/** Where this category's garment must actually sit on the body. */
+function anchorBounds(category, landmarks) {
+  return resolveBand(ANCHOR_BANDS[category], landmarks);
 }
 
 /** Squared distance in Lab, for comparing a pixel to the base colour. */
@@ -306,14 +316,39 @@ function rgbToLab(r, g, b) {
 }
 
 // Below this Lab distance a pixel is treated as the base layer rather than the
-// garment. Generous enough to absorb shading and JPEG noise on the bodysuit,
-// tight enough that a genuinely different colour survives.
+// garment. Generous enough to absorb shading and JPEG noise on the base
+// garment, tight enough that a genuinely different colour survives.
 const BASE_COLOUR_TOLERANCE = 22;
+
+/**
+ * Where each category attaches to the body.
+ *
+ * Tighter than BANDS, and answering a different question. BANDS says how far a
+ * garment is allowed to extend; this says where its body must actually sit.
+ *
+ * The generator completes outfits: asked to fit a crop top, it will often
+ * invent underwear, because a crop top alone is not an image it was trained on.
+ * That invention lands as its own blob near the pelvis, nowhere near where a
+ * top attaches, so comparing each blob against this band separates the real
+ * garment from the imagined one.
+ */
+const ANCHOR_BANDS = {
+  tops:          { from: ['shoulder', -0.25], to: ['hip', -0.05] },
+  gym_wear:      { from: ['shoulder', -0.25], to: ['hip', -0.05] },
+  outerwear:     { from: ['shoulder', -0.35], to: ['hip', 0.20] },
+  bottoms:       { from: ['hip', -0.15], to: ['knee', 0.20] },
+  dresses:       { from: ['shoulder', -0.25], to: ['knee', 0.00] },
+  swimwear:      { from: ['shoulder', -0.10], to: ['hip', 0.40] },
+  shoes:         { from: ['ankle', -0.25], to: ['ankle', 2.0] },
+  accessories:   null,   // separated by class, not position
+  undergarments: { from: ['shoulder', 0.25], to: ['hip', 0.45] },
+};
 
 /**
  * Cut the garment out of a generated image.
  *
- * Three filters, each removing something the others cannot:
+ * Three filters decide which pixels are garment, each removing something the
+ * others cannot:
  *
  *   class    — clothing pixels, or accessory pixels for an accessory. These are
  *              different MediaPipe classes, so a necklace and a shirt separate
@@ -322,6 +357,11 @@ const BASE_COLOUR_TOLERANCE = 22;
  *              A top cannot contain trousers.
  *   baseline — pixels matching the base layer worn in the avatar photo. What
  *              the generator left uncovered is not part of the garment.
+ *
+ * Then three shape passes clean up what the filters leave behind: blobs that
+ * are not where the category attaches are dropped, small holes punched into the
+ * interior are restored, and the boundary is pulled in off the mask's coarse
+ * grid.
  */
 export async function segmentGarment(source, category, options = {}) {
   const { landmarks = null, baseColor = null } = options;
@@ -363,39 +403,45 @@ export async function segmentGarment(source, category, options = {}) {
   const scaleX = maskWidth / bitmap.width;
   const scaleY = maskHeight / bitmap.height;
 
+  let kept = new Uint8Array(bitmap.width * bitmap.height);
+
   for (let y = 0; y < bitmap.height; y += 1) {
-    const inBand = y >= top && y <= bottom;
+    if (y < top || y > bottom) continue;
+
     const maskRow = Math.min(maskHeight - 1, (y * scaleY) | 0) * maskWidth;
+    const row = y * bitmap.width;
 
     for (let x = 0; x < bitmap.width; x += 1) {
-      const offset = (y * bitmap.width + x) * 4;
-
-      if (!inBand) {
-        pixels[offset + 3] = 0;
-        continue;
-      }
-
       const klass = maskData[maskRow + Math.min(maskWidth - 1, (x * scaleX) | 0)];
+      if (klass !== wantedClass) continue;
 
-      if (klass !== wantedClass) {
-        pixels[offset + 3] = 0;
-        continue;
-      }
+      const offset = (row + x) * 4;
 
       if (
         baseLab &&
         labDistanceSq(baseLab, pixels[offset], pixels[offset + 1], pixels[offset + 2]) <
           toleranceSq
       ) {
-        pixels[offset + 3] = 0;
+        continue;
       }
+
+      kept[row + x] = 1;
     }
   }
 
-  context.putImageData(image, 0, 0);
   result.close?.();
 
-  featherEdges(context, bitmap.width, bitmap.height);
+  kept = keepAnchoredComponents(
+    kept,
+    bitmap.width,
+    bitmap.height,
+    anchorBounds(category, landmarks),
+  );
+  kept = fillEnclosedHoles(kept, bitmap.width, bitmap.height);
+  kept = erodeMask(kept, bitmap.width, bitmap.height, ERODE_RADIUS);
+
+  context.putImageData(image, 0, 0);
+  featherEdges(context, bitmap.width, bitmap.height, kept);
 
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
 }
@@ -468,54 +514,6 @@ export async function measureBaseColor(blob) {
     spread: Math.round(spread),
     plain: spread < 30,
   };
-}
-
-/**
- * Soften the alpha boundary.
- *
- * The category mask is hard-edged at 256x256 and upscales into visible
- * stair-stepping. A short blur applied to alpha alone removes it without
- * touching colour.
- */
-function featherEdges(context, width, height) {
-  const image = context.getImageData(0, 0, width, height);
-  const source = image.data;
-  const alpha = new Uint8ClampedArray(width * height);
-
-  for (let i = 0; i < width * height; i += 1) {
-    alpha[i] = source[i * 4 + 3];
-  }
-
-  const radius = 2;
-  const blurred = new Uint8ClampedArray(width * height);
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      let total = 0;
-      let samples = 0;
-
-      for (let dy = -radius; dy <= radius; dy += 1) {
-        const ny = y + dy;
-        if (ny < 0 || ny >= height) continue;
-
-        for (let dx = -radius; dx <= radius; dx += 1) {
-          const nx = x + dx;
-          if (nx < 0 || nx >= width) continue;
-
-          total += alpha[ny * width + nx];
-          samples += 1;
-        }
-      }
-
-      blurred[y * width + x] = total / samples;
-    }
-  }
-
-  for (let i = 0; i < width * height; i += 1) {
-    source[i * 4 + 3] = blurred[i];
-  }
-
-  context.putImageData(image, 0, 0);
 }
 
 // -------------------------------------------------------------- alignment

@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "lint": "eslint src --ext js,jsx",
     "fetch-models": "node scripts/fetch-models.mjs",
-    "check-bundle": "node scripts/check-bundle.mjs"
+    "check-bundle": "node scripts/check-bundle.mjs",
+    "test": "node test/mask.test.mjs",
+    "test:browser": "node test/stacking.test.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^6.1.2",
