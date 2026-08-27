@@ -5,11 +5,16 @@
  * FASHN. It runs exclusively in an Edge Function — the API key never reaches
  * the browser or the APK.
  *
- * >>> VERIFY BEFORE FIRST PAID RUN <<<
- * The request field names below follow FASHN's documented universal /v1/run
- * contract, but docs.fashn.ai was unreachable from the build environment.
- * Confirm them against the live API reference before spending credits. They
- * are confined to this file so a correction is a single-file change.
+ * The input schema below is the one the API itself reported. An earlier guess
+ * was rejected with:
+ *
+ *   Invalid "inputs" for tryon-max model: "product_image" product_image is
+ *   required; "garment_image" garment_image is not allowed; "category"
+ *   category is not allowed; "num_samples" num_samples is not allowed
+ *
+ * So tryon-max takes model_image and product_image and infers the garment type
+ * itself. Category is still tracked in our own records — segmentation and
+ * z-ordering need it — it simply is not part of this request.
  */
 
 const API_BASE = 'https://api.fashn.ai/v1';
@@ -21,18 +26,6 @@ const DEFAULT_MODEL = 'tryon-max';
 
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 180_000;
-
-const CATEGORY_MAP: Record<string, string> = {
-  tops: 'tops',
-  bottoms: 'bottoms',
-  dresses: 'one-pieces',
-  outerwear: 'tops',
-  swimwear: 'one-pieces',
-  gym_wear: 'tops',
-  shoes: 'auto',
-  accessories: 'auto',
-  undergarments: 'auto',
-};
 
 export class FashnError extends Error {
   readonly retryable: boolean;
@@ -65,7 +58,6 @@ async function submit(
   apiKey: string,
   avatar: Uint8Array,
   garment: Uint8Array,
-  category: string,
   avatarType: string,
   garmentType: string,
 ): Promise<string> {
@@ -73,12 +65,10 @@ async function submit(
     model_name: DEFAULT_MODEL,
     inputs: {
       model_image: toDataUri(avatar, avatarType),
-      garment_image: toDataUri(garment, garmentType),
-      category: CATEGORY_MAP[category] ?? 'auto',
+      product_image: toDataUri(garment, garmentType),
       // Deterministic, so regenerating after a fix yields a comparable image
       // rather than a differently-posed one.
       seed: 42,
-      num_samples: 1,
     },
   };
 
@@ -184,7 +174,6 @@ export async function generate(opts: {
   apiKey: string;
   avatar: Uint8Array;
   garment: Uint8Array;
-  category: string;
   avatarType?: string;
   garmentType?: string;
 }): Promise<TryOnResult> {
@@ -192,7 +181,6 @@ export async function generate(opts: {
     opts.apiKey,
     opts.avatar,
     opts.garment,
-    opts.category,
     opts.avatarType ?? 'image/jpeg',
     opts.garmentType ?? 'image/jpeg',
   );

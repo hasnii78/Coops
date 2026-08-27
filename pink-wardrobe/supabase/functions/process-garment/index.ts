@@ -162,7 +162,6 @@ Deno.serve(async (req: Request) => {
       apiKey,
       avatar: new Uint8Array(await avatarFile.data.arrayBuffer()),
       garment: new Uint8Array(await garmentFile.data.arrayBuffer()),
-      category: item.category,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Generation failed.';
