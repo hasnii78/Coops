@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
-import { CATEGORY_LABELS } from '../lib/constants';
+import { CATEGORY_LABELS, PLACEMENTS } from '../lib/constants';
+import { recutWithPlacement } from '../lib/closet';
 import { signedUrl } from '../lib/storage';
 
 /**
@@ -10,9 +11,29 @@ import { signedUrl } from '../lib/storage';
  * offered with an undo, because the layer behind an item cost a credit and is
  * the one thing in the app that money cannot immediately replace.
  */
-export default function ItemSheet({ item, onClose, onDelete }) {
+export default function ItemSheet({ item, onClose, onDelete, onChanged }) {
   const [url, setUrl] = useState(null);
   const [confirming, setConfirming] = useState(false);
+  const [placement, setPlacement] = useState(item.placement || 'neck');
+  const [recutting, setRecutting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const accessory = item.category === 'accessories';
+
+  async function handleRecut() {
+    setError(null);
+    setRecutting(true);
+
+    try {
+      await recutWithPlacement(item, placement);
+      onChanged?.();
+      onClose();
+    } catch (caught) {
+      setError(caught.message);
+    } finally {
+      setRecutting(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -68,6 +89,30 @@ export default function ItemSheet({ item, onClose, onDelete }) {
             ) : null}
           </div>
         </div>
+
+        {accessory && !confirming ? (
+          <label className="stack" style={{ gap: 'var(--space-1)' }}>
+            <span className="section-title">Where it goes</span>
+            <select className="input" value={placement}
+              onChange={(event) => setPlacement(event.target.value)}>
+              {PLACEMENTS.map(({ id, label }) => (
+                <option key={id} value={id}>{label}</option>
+              ))}
+            </select>
+
+            <button type="button" className="btn btn-secondary" onClick={handleRecut}
+              disabled={recutting}>
+              {recutting ? <span className="spinner" aria-hidden="true" /> : null}
+              {recutting ? 'Looking again…' : 'Cut it again — free'}
+            </button>
+
+            <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>
+              Uses the image already generated for this item, so it costs nothing.
+            </span>
+          </label>
+        ) : null}
+
+        {error ? <div className="error-banner" role="alert">{error}</div> : null}
 
         {confirming ? (
           <>

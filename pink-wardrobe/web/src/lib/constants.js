@@ -15,6 +15,20 @@ export const CATEGORY_LABELS = Object.fromEntries(
   CATEGORIES.map(({ id, label }) => [id, label]),
 );
 
+/**
+ * Where a small accessory sits. Must match the check on items.placement.
+ *
+ * Each maps to a crop around a pose landmark, which is what makes something as
+ * small as a watch findable at all.
+ */
+export const PLACEMENTS = [
+  { id: 'neck', label: 'Neck — necklace, scarf, choker' },
+  { id: 'wrist', label: 'Wrist — watch, bracelet' },
+  { id: 'waist', label: 'Waist — belt' },
+  { id: 'ears', label: 'Ears — earrings' },
+  { id: 'head', label: 'Head — hat, sunglasses, headband' },
+];
+
 /** Categories that cannot be generated onto the avatar on their own. */
 export const GENERATION_BLOCKED = ['undergarments'];
 

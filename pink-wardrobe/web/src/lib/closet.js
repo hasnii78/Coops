@@ -195,6 +195,22 @@ export async function finishProcessing(item) {
 
   if (profileError) throw profileError;
 
+  try {
+    return await cutAndSave(item, profile, userId);
+  } catch (error) {
+    // Without this the row stays at 'processing' forever: the server is done,
+    // the phone is the only thing that can finish the job, and a silent
+    // exception here is indistinguishable from work still in progress.
+    await supabase
+      .from('items')
+      .update({ status: 'failed', error: error.message })
+      .eq('id', item.id);
+
+    throw error;
+  }
+}
+
+async function cutAndSave(item, profile, userId) {
   const generationBlob = await download(item.generation_path, BUCKET_WARDROBE);
 
   // Step 4 — cut the garment out. Landmarks are detected on the generation
@@ -209,6 +225,7 @@ export async function finishProcessing(item) {
   const cutout = await segmentGarment(generationBlob, item.category, {
     landmarks: generationLandmarks,
     baseColor: profile.avatar_base_color,
+    placement: item.placement,
   });
 
   // Step 5 — align it to the master template.
@@ -216,6 +233,7 @@ export async function finishProcessing(item) {
     layerBlob: cutout,
     generationBlob,
     masterLandmarks: profile.avatar_landmarks,
+    category: item.category,
   });
 
   // Step 6 — save the reusable layer.
@@ -249,7 +267,7 @@ export async function finishProcessing(item) {
  * Steps 1-3 (moderation, FASHN, immediate persist) happen in the Edge
  * Function. Steps 4-6 happen here.
  */
-export async function addItem({ file, name, category, price, tags = [] }) {
+export async function addItem({ file, name, category, price, tags = [], placement = null }) {
   const userId = await requireUserId();
   const compressed = await compressImage(file);
 
@@ -263,6 +281,7 @@ export async function addItem({ file, name, category, price, tags = [] }) {
       category,
       price: Number(price) || 0,
       tags,
+      placement,
       status: catalogueOnly ? 'catalogued' : 'queued',
     })
     .select()
@@ -285,7 +304,7 @@ export async function addItem({ file, name, category, price, tags = [] }) {
     return { ...item, layer_path: result.layerPath, status: 'ready' };
   }
 
-  return finishProcessing({ ...item, generation_path: result.generationPath, category });
+  return finishProcessing({ ...item, generation_path: result.generationPath, category, placement });
 }
 
 /**
@@ -308,6 +327,54 @@ export async function addItemsBulk(entries, onProgress) {
   return results;
 }
 
+/**
+ * Items whose paid step finished but whose layer was never cut.
+ *
+ * The server marks an item 'processing' the moment FASHN returns, and only the
+ * device can move it on from there — cutting, aligning and uploading all happen
+ * locally. So closing the app mid-cut, losing signal, or simply switching to
+ * another app long enough for Android to reclaim the WebView leaves the item
+ * stranded: the spinner keeps turning and nothing is running behind it.
+ */
+export async function listStrandedItems() {
+  const { data, error } = await supabase
+    .from('items')
+    .select('*')
+    .eq('status', 'processing')
+    .not('generation_path', 'is', null)
+    .is('deleted_at', null);
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+/**
+ * Finish everything that was left stranded.
+ *
+ * Free by construction: the generation is already bought and stored, and every
+ * remaining step runs on the device.
+ */
+export async function resumeStrandedItems(onProgress) {
+  const stranded = await listStrandedItems();
+  const results = [];
+
+  for (const [index, item] of stranded.entries()) {
+    onProgress?.({ done: index, total: stranded.length, name: item.name });
+
+    try {
+      await finishProcessing(item);
+      results.push({ ok: true, name: item.name });
+    } catch (error) {
+      // finishProcessing has already written the reason to the row, so the
+      // tile can explain itself even if nobody is watching this call.
+      results.push({ ok: false, name: item.name, error: error.message });
+    }
+  }
+
+  onProgress?.({ done: stranded.length, total: stranded.length });
+  return results;
+}
+
 /** Retry a failed item. Failed FASHN generations are not billed. */
 export async function retryItem(item) {
   if (item.generation_path) {
@@ -327,6 +394,18 @@ async function patchItem(id, changes) {
 
   if (error) throw error;
   return data;
+}
+
+/**
+ * Tell the app where an accessory sits, and cut it again.
+ *
+ * Free: the generation is already bought, so this only re-runs the on-device
+ * half. It is the way an accessory added before placement existed — or filed
+ * against the wrong body part — gets fixed without paying twice.
+ */
+export async function recutWithPlacement(item, placement) {
+  const updated = await patchItem(item.id, { placement, status: 'processing', error: null });
+  return finishProcessing(updated);
 }
 
 export const toggleLike = (id, liked) => patchItem(id, { liked });

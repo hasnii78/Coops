@@ -13,9 +13,12 @@
  * A blob smaller than this share of the largest anchored blob is discarded.
  *
  * Real garments do come in pieces — two shoes, the cups of a bikini — and those
- * pieces are comparable in size. Speckle from a noisy mask is not.
+ * pieces are comparable in size. Speckle from a noisy mask is not, and it is
+ * orders of magnitude smaller, so the threshold only has to clear noise. It was
+ * 8% to begin with, which was enough to silently delete a strip of a trouser leg
+ * that the coarse mask had pinched off from the rest.
  */
-export const MIN_COMPONENT_SHARE = 0.08;
+export const MIN_COMPONENT_SHARE = 0.01;
 
 /**
  * A hole larger than this share of the garment is left alone.
@@ -26,6 +29,50 @@ export const MIN_COMPONENT_SHARE = 0.08;
  * legs, say — and filling it would be worse than the hole.
  */
 export const MAX_HOLE_SHARE = 0.15;
+
+/**
+ * How much of a pixel is covered by one of the wanted classes.
+ *
+ * The model returns a 256x256 map of class ids. Reading it with the nearest
+ * texel snaps every boundary to that coarse grid, which on a full-size render
+ * is a visible staircase along the edge of a garment. Class ids cannot be
+ * interpolated — the average of "clothes" and "hair" is meaningless — but
+ * membership can: each of the four surrounding texels either is a wanted class
+ * or is not, and the bilinear weights give the fraction of this pixel that the
+ * garment covers. Thresholding that fraction puts the boundary along a smooth
+ * contour between texel centres rather than along texel walls.
+ */
+export function classCoverage(mask, width, height, wanted, sx, sy) {
+  // Texel centres sit at +0.5, so the sample point is shifted before flooring.
+  const x = sx - 0.5;
+  const y = sy - 0.5;
+
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+
+  const clampX = (value) => (value < 0 ? 0 : value > width - 1 ? width - 1 : value);
+  const clampY = (value) => (value < 0 ? 0 : value > height - 1 ? height - 1 : value);
+
+  let covered = 0;
+
+  for (let j = 0; j < 2; j += 1) {
+    const row = clampY(y0 + j) * width;
+    const wy = j ? fy : 1 - fy;
+
+    for (let i = 0; i < 2; i += 1) {
+      const klass = mask[row + clampX(x0 + i)];
+      if (!wanted.includes(klass)) continue;
+      covered += (i ? fx : 1 - fx) * wy;
+    }
+  }
+
+  return covered;
+}
+
+/** Half coverage is the boundary — the contour a smooth edge follows. */
+export const COVERAGE_THRESHOLD = 0.5;
 
 /**
  * Label 4-connected runs of kept pixels.

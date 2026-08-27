@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 import { addItem, addItemsBulk } from '../lib/closet';
-import { CATEGORIES, GENERATION_BLOCKED } from '../lib/constants';
+import { CATEGORIES, GENERATION_BLOCKED, PLACEMENTS } from '../lib/constants';
 
 /**
  * Add one or many garments.
@@ -15,12 +15,19 @@ export default function AddItemSheet({ onClose, onAdded }) {
   const [name, setName] = useState('');
   const [category, setCategory] = useState('tops');
   const [price, setPrice] = useState('');
+  const [placement, setPlacement] = useState('neck');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(null);
   const [error, setError] = useState(null);
 
   const isBulk = files.length > 1;
   const catalogueOnly = GENERATION_BLOCKED.includes(category);
+
+  // Small accessories are invisible to the segmenter at full-body scale, so it
+  // is pointed at the right body part instead. Which part cannot be read off a
+  // product photo — a chain could be a necklace, a bracelet or an anklet — so
+  // it is asked once, here.
+  const needsPlacement = category === 'accessories';
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -36,6 +43,7 @@ export default function AddItemSheet({ onClose, onAdded }) {
           name: `${name.trim() || 'Item'} ${index + 1}`,
           category,
           price,
+          placement: needsPlacement ? placement : null,
         }));
 
         const results = await addItemsBulk(entries, (done, total) =>
@@ -48,7 +56,10 @@ export default function AddItemSheet({ onClose, onAdded }) {
           return;
         }
       } else {
-        await addItem({ file: files[0], name, category, price });
+        await addItem({
+          file: files[0], name, category, price,
+          placement: needsPlacement ? placement : null,
+        });
       }
 
       onAdded?.();
@@ -135,6 +146,23 @@ export default function AddItemSheet({ onClose, onAdded }) {
             Undergarments are saved to your closet for tracking, but aren't
             generated onto your avatar.
           </div>
+        ) : null}
+
+        {needsPlacement ? (
+          <label className="stack" style={{ gap: 'var(--space-1)' }}>
+            <span className="section-title">Where does it go?</span>
+            <select className="input" value={placement}
+              onChange={(event) => setPlacement(event.target.value)}>
+              {PLACEMENTS.map(({ id, label }) => (
+                <option key={id} value={id}>{label}</option>
+              ))}
+            </select>
+            <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>
+              Something this small is only a few pixels on a full-body photo.
+              Knowing where it sits lets the app look at just that part of you,
+              close up, which is the difference between finding it and not.
+            </span>
+          </label>
         ) : null}
 
         <label className="stack" style={{ gap: 'var(--space-1)' }}>

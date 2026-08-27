@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   keepAnchoredComponents, fillEnclosedHoles, erodeMask, decontaminate,
+  classCoverage, COVERAGE_THRESHOLD,
 } from '../src/lib/mask.js';
 
 const W = 120, H = 200;
@@ -182,6 +183,46 @@ function area(mask) { return mask.reduce((n, v) => n + v, 0); }
   const edge = data[(5 * w + 10) * 4 + 3];
   assert.ok(edge > 0 && edge < 255, `the boundary is softened, not binary (got ${edge})`);
   console.log(`8 no outward bleed; boundary alpha ${edge}`);
+}
+
+// ---- 9. bilinear class coverage -----------------------------------------
+{
+  // A 4x4 mask, left half clothes (4), right half hair (1).
+  const m = new Uint8Array([
+    4, 4, 1, 1,
+    4, 4, 1, 1,
+    4, 4, 1, 1,
+    4, 4, 1, 1,
+  ]);
+  const CLOTHES = [4];
+
+  // Deep inside each half, coverage is total or nothing.
+  assert.equal(classCoverage(m, 4, 4, CLOTHES, 0.5, 1.5), 1, 'inside the garment');
+  assert.equal(classCoverage(m, 4, 4, CLOTHES, 3.5, 1.5), 0, 'outside the garment');
+
+  // Exactly between the last clothes texel and the first hair texel, coverage
+  // is half — the boundary. Nearest-neighbour can only ever answer 0 or 1 here,
+  // which is what made every edge a staircase.
+  assert.equal(classCoverage(m, 4, 4, CLOTHES, 2.0, 1.5), 0.5, 'on the boundary');
+
+  // And it moves smoothly across that gap rather than snapping.
+  const ramp = [1.6, 1.8, 2.0, 2.2, 2.4].map(
+    (x) => classCoverage(m, 4, 4, CLOTHES, x, 1.5),
+  );
+  for (let i = 1; i < ramp.length; i += 1) {
+    assert.ok(ramp[i] < ramp[i - 1], `coverage falls monotonically: ${ramp}`);
+  }
+  assert.ok(new Set(ramp).size === ramp.length, 'every step is a distinct value');
+
+  // Sampling outside the mask clamps rather than reading rubbish.
+  assert.equal(classCoverage(m, 4, 4, CLOTHES, -5, -5), 1, 'clamps past the edge');
+  assert.equal(classCoverage(m, 4, 4, CLOTHES, 99, 99), 0, 'clamps past the far edge');
+
+  // Multi-class: shoes are filed under the catch-all, not under clothing.
+  assert.equal(classCoverage(m, 4, 4, [4, 1], 2.0, 1.5), 1, 'both classes wanted');
+
+  assert.equal(COVERAGE_THRESHOLD, 0.5);
+  console.log(`9 coverage ramps smoothly across the boundary: ${ramp.map((v) => v.toFixed(2)).join(' ')}`);
 }
 
 console.log('\nall assertions passed');

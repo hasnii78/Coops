@@ -20,7 +20,9 @@ import {
 } from '@mediapipe/tasks-vision';
 
 import {
+  COVERAGE_THRESHOLD,
   ERODE_RADIUS,
+  classCoverage,
   erodeMask,
   featherEdges,
   fillEnclosedHoles,
@@ -42,10 +44,37 @@ const POSE_MODEL = '/mediapipe/pose_landmarker_lite.task';
 const CLASS_CLOTHES = 4;
 const CLASS_ACCESSORIES = 5;
 
-/** Pose landmark indices. Shoulders and hips are the most stable anchors. */
+/**
+ * Which classes count as "the garment" for each category.
+ *
+ * Shoes are the reason this is a table rather than a flag. The model does not
+ * file footwear under clothing — it goes in the same catch-all class as
+ * jewellery — so asking only for clothing returned nothing at all and saved an
+ * empty layer. The band already confines a shoe cut to the ankles, so accepting
+ * both classes there cannot pull in a shirt.
+ */
+const CATEGORY_CLASSES = {
+  accessories: [CLASS_ACCESSORIES],
+  shoes: [CLASS_CLOTHES, CLASS_ACCESSORIES],
+};
+
+const DEFAULT_CLASSES = [CLASS_CLOTHES];
+
+/**
+ * Pose landmark indices. Shoulders and hips are the most stable anchors.
+ *
+ * The head and wrist points are here only to aim the crop for a small
+ * accessory: a watch has to be looked for at the actual wrist, and guessing one
+ * from the hips is the kind of approximation that finds a hand sometimes.
+ */
 const ANCHORS = {
+  nose: 0,
+  leftEar: 7,
+  rightEar: 8,
   leftShoulder: 11,
   rightShoulder: 12,
+  leftWrist: 15,
+  rightWrist: 16,
   leftHip: 23,
   rightHip: 24,
   leftKnee: 25,
@@ -54,13 +83,31 @@ const ANCHORS = {
   rightAnkle: 28,
 };
 
+const TORSO_ANCHORS = ['leftShoulder', 'rightShoulder', 'leftHip', 'rightHip'];
+const LEG_ANCHORS = ['leftKnee', 'rightKnee', 'leftAnkle', 'rightAnkle'];
+
 /**
- * Shoulders and hips are the alignment anchors: they stay put whatever the
- * garment. Knees and ankles move too much with hem length to align against,
- * but they are exactly what a band needs, so they are detected and used only
- * for cutting.
+ * Which landmarks a category is aligned on.
+ *
+ * The transform is a similarity — translate, rotate, uniform scale — fitted to
+ * these points, so error grows with distance from them. Anchoring everything on
+ * four points clustered in the torso was fine for a shirt and visibly wrong for
+ * jeans: by the ankles, a fraction of a degree of rotation is centimetres of
+ * drift, and the avatar's own leg shows through beside the denim.
+ *
+ * Knees and ankles were left out originally on the grounds that they move with
+ * hem length. They do not: the pose model reports joints, not hems. They are as
+ * stable as the hips and they are where a leg garment needs to land. Anything
+ * not visible in both images is dropped before fitting, so including them costs
+ * nothing when the legs are out of frame.
  */
-const ALIGNMENT_ANCHORS = ['leftShoulder', 'rightShoulder', 'leftHip', 'rightHip'];
+const ALIGNMENT_ANCHORS = {
+  bottoms: [...TORSO_ANCHORS, ...LEG_ANCHORS],
+  dresses: [...TORSO_ANCHORS, ...LEG_ANCHORS],
+  shoes: LEG_ANCHORS,
+};
+
+const DEFAULT_ALIGNMENT_ANCHORS = TORSO_ANCHORS;
 
 const MIN_VISIBILITY = 0.5;
 
@@ -345,14 +392,108 @@ const ANCHOR_BANDS = {
 };
 
 /**
+ * Where a placed accessory sits, as a box around a landmark.
+ *
+ * Sized in torso heights so it scales with the person rather than with the
+ * photo. Generous enough to contain the whole object — a watch face plus its
+ * strap, a necklace plus its pendant — because anything falling outside the
+ * crop cannot be found at all.
+ *
+ * `points` are tried in order and the first pair both visible wins, so a
+ * bracelet is still found when one hand is hidden.
+ */
+const PLACEMENT_CROPS = {
+  neck:  { points: [['leftShoulder', 'rightShoulder']], dy: -0.12, size: 0.55 },
+  wrist: { points: [['leftWrist'], ['rightWrist']], dy: 0, size: 0.42 },
+  waist: { points: [['leftHip', 'rightHip']], dy: 0, size: 0.60 },
+  ears:  { points: [['leftEar', 'rightEar'], ['nose']], dy: 0, size: 0.55 },
+  head:  { points: [['nose'], ['leftEar', 'rightEar']], dy: -0.18, size: 0.85 },
+};
+
+/**
+ * A cut this small is not a garment.
+ *
+ * Below it the layer is invisible on the avatar, so saving it produces an item
+ * that looks finished and shows nothing — which is exactly how an empty watch
+ * and an empty pair of trainers came to sit in the closet marked ready.
+ */
+const MIN_GARMENT_COVERAGE = 0.002;
+
+/** Pixel box around a landmark, clamped to the frame. */
+function placementBox(placement, landmarks) {
+  const spec = PLACEMENT_CROPS[placement];
+  if (!spec || !landmarks) return null;
+
+  const p = landmarks.points;
+  const shoulder = midpointY(p, 'leftShoulder', 'rightShoulder');
+  const hip = midpointY(p, 'leftHip', 'rightHip');
+  if (shoulder == null || hip == null) return null;
+
+  const torso = Math.abs(hip - shoulder) || landmarks.height * 0.25;
+  const half = (spec.size * torso) / 2;
+
+  const centre = spec.points
+    .map((names) => names.map((name) => p[name]))
+    .find((found) => found.every(Boolean));
+
+  if (!centre) return null;
+
+  const cx = centre.reduce((sum, point) => sum + point[0], 0) / centre.length;
+  const cy = centre.reduce((sum, point) => sum + point[1], 0) / centre.length
+    + spec.dy * torso;
+
+  return {
+    left: Math.max(0, Math.round(cx - half)),
+    top: Math.max(0, Math.round(cy - half)),
+    right: Math.min(landmarks.width, Math.round(cx + half)),
+    bottom: Math.min(landmarks.height, Math.round(cy + half)),
+  };
+}
+
+/**
+ * Run the segmenter on a crop, and return its mask in full-frame terms.
+ *
+ * The model resizes whatever it is given to 256x256. On a full-body photo a
+ * watch is perhaps five pixels across by the time it gets there, which is why
+ * nothing was ever found. Handing it a crop of the wrist spends the same 256
+ * pixels on a hand instead of a whole person, and the watch becomes plainly
+ * visible to it.
+ */
+async function segmentCrop(bitmap, box) {
+  const width = box.right - box.left;
+  const height = box.bottom - box.top;
+  if (width < 16 || height < 16) return null;
+
+  const canvas = canvasFor(width, height);
+  canvas.getContext('2d').drawImage(
+    bitmap, box.left, box.top, width, height, 0, 0, width, height,
+  );
+
+  const segmenter = await getSegmenter();
+  const result = segmenter.segment(canvas);
+  const mask = result.categoryMask;
+
+  if (!mask) {
+    result.close?.();
+    return null;
+  }
+
+  const data = mask.getAsUint8Array().slice();
+  const shape = { width: mask.width, height: mask.height };
+  result.close?.();
+
+  return { data, ...shape, box, cropWidth: width, cropHeight: height };
+}
+
+/**
  * Cut the garment out of a generated image.
  *
  * Three filters decide which pixels are garment, each removing something the
  * others cannot:
  *
- *   class    — clothing pixels, or accessory pixels for an accessory. These are
- *              different MediaPipe classes, so a necklace and a shirt separate
- *              even though they overlap.
+ *   class    — the classes this category is filed under. Clothing for most,
+ *              the catch-all class for accessories, and both for shoes, which
+ *              the model does not consider clothing.
  *   band     — the vertical extent this category occupies, from real landmarks.
  *              A top cannot contain trousers.
  *   baseline — pixels matching the base layer worn in the avatar photo. What
@@ -360,25 +501,41 @@ const ANCHOR_BANDS = {
  *
  * Then three shape passes clean up what the filters leave behind: blobs that
  * are not where the category attaches are dropped, small holes punched into the
- * interior are restored, and the boundary is pulled in off the mask's coarse
- * grid.
+ * interior are restored, and the boundary is pulled in off the mask's grid.
+ *
+ * A placed accessory takes a different route through the same machinery: the
+ * mask comes from a crop around its landmark rather than the whole frame, and
+ * the crop itself replaces the band.
  */
 export async function segmentGarment(source, category, options = {}) {
-  const { landmarks = null, baseColor = null } = options;
+  const { landmarks = null, baseColor = null, placement = null } = options;
 
   const bitmap = await toBitmap(source);
-  const segmenter = await getSegmenter();
-  const result = segmenter.segment(bitmap);
 
-  const mask = result.categoryMask;
-  if (!mask) {
-    result.close?.();
-    throw new VisionError('Segmentation produced no mask.');
+  const box = placement ? placementBox(placement, landmarks) : null;
+  const cropped = box ? await segmentCrop(bitmap, box) : null;
+
+  let result = null;
+  let mask;
+  let maskWidth;
+  let maskHeight;
+
+  if (cropped) {
+    ({ width: maskWidth, height: maskHeight } = cropped);
+    mask = cropped.data;
+  } else {
+    const segmenter = await getSegmenter();
+    result = segmenter.segment(bitmap);
+
+    if (!result.categoryMask) {
+      result.close?.();
+      throw new VisionError('Segmentation produced no mask.');
+    }
+
+    mask = result.categoryMask.getAsUint8Array();
+    maskWidth = result.categoryMask.width;
+    maskHeight = result.categoryMask.height;
   }
-
-  const maskData = mask.getAsUint8Array();
-  const maskWidth = mask.width;
-  const maskHeight = mask.height;
 
   const canvas = canvasFor(bitmap.width, bitmap.height);
   const context = canvas.getContext('2d', { willReadFrequently: true });
@@ -387,33 +544,40 @@ export async function segmentGarment(source, category, options = {}) {
   const image = context.getImageData(0, 0, bitmap.width, bitmap.height);
   const pixels = image.data;
 
-  // An accessory keeps ONLY accessory pixels. Keeping clothes as well — as an
-  // earlier version did — meant a necklace layer carried the entire outfit the
-  // generator had drawn around it.
-  const isAccessory = category === 'accessories';
-  const wantedClass = isAccessory ? CLASS_ACCESSORIES : CLASS_CLOTHES;
+  const wanted = CATEGORY_CLASSES[category] || DEFAULT_CLASSES;
 
-  const bounds = bandBounds(category, landmarks);
+  // A crop is its own boundary, so the band would only fight it.
+  const bounds = cropped ? null : bandBounds(category, landmarks);
   const top = bounds ? bounds.top : 0;
   const bottom = bounds ? bounds.bottom : bitmap.height;
 
   const baseLab = baseColor ? rgbToLab(baseColor.r, baseColor.g, baseColor.b) : null;
   const toleranceSq = BASE_COLOUR_TOLERANCE * BASE_COLOUR_TOLERANCE;
 
-  const scaleX = maskWidth / bitmap.width;
-  const scaleY = maskHeight / bitmap.height;
+  // Image pixels map into mask space differently for a crop: only the cropped
+  // region has any mask at all, and it fills the whole 256x256.
+  const originX = cropped ? cropped.box.left : 0;
+  const originY = cropped ? cropped.box.top : 0;
+  const scaleX = maskWidth / (cropped ? cropped.cropWidth : bitmap.width);
+  const scaleY = maskHeight / (cropped ? cropped.cropHeight : bitmap.height);
+
+  const firstX = cropped ? cropped.box.left : 0;
+  const lastX = cropped ? cropped.box.right : bitmap.width;
+  const firstY = cropped ? cropped.box.top : 0;
+  const lastY = cropped ? cropped.box.bottom : bitmap.height;
 
   let kept = new Uint8Array(bitmap.width * bitmap.height);
+  let covered = 0;
 
-  for (let y = 0; y < bitmap.height; y += 1) {
-    if (y < top || y > bottom) continue;
-
-    const maskRow = Math.min(maskHeight - 1, (y * scaleY) | 0) * maskWidth;
+  for (let y = Math.max(firstY, Math.floor(top)); y < Math.min(lastY, Math.ceil(bottom)); y += 1) {
     const row = y * bitmap.width;
+    const sy = (y + 0.5 - originY) * scaleY;
 
-    for (let x = 0; x < bitmap.width; x += 1) {
-      const klass = maskData[maskRow + Math.min(maskWidth - 1, (x * scaleX) | 0)];
-      if (klass !== wantedClass) continue;
+    for (let x = firstX; x < lastX; x += 1) {
+      const coverage = classCoverage(
+        mask, maskWidth, maskHeight, wanted, (x + 0.5 - originX) * scaleX, sy,
+      );
+      if (coverage < COVERAGE_THRESHOLD) continue;
 
       const offset = (row + x) * 4;
 
@@ -426,19 +590,33 @@ export async function segmentGarment(source, category, options = {}) {
       }
 
       kept[row + x] = 1;
+      covered += 1;
     }
   }
 
-  result.close?.();
+  result?.close?.();
 
   kept = keepAnchoredComponents(
     kept,
     bitmap.width,
     bitmap.height,
-    anchorBounds(category, landmarks),
+    cropped ? null : anchorBounds(category, landmarks),
   );
   kept = fillEnclosedHoles(kept, bitmap.width, bitmap.height);
   kept = erodeMask(kept, bitmap.width, bitmap.height, ERODE_RADIUS);
+
+  // Counted after every pass, so a cut emptied by the shape filters is caught
+  // as surely as one the model never found.
+  let remaining = 0;
+  for (let i = 0; i < kept.length; i += 1) remaining += kept[i];
+
+  if (remaining < bitmap.width * bitmap.height * MIN_GARMENT_COVERAGE) {
+    throw new VisionError(
+      covered === 0
+        ? 'Nothing recognisable as this kind of item was found in the generated image.'
+        : 'Too little of the item survived cutting to make a usable layer.',
+    );
+  }
 
   context.putImageData(image, 0, 0);
   featherEdges(context, bitmap.width, bitmap.height, kept);
@@ -526,8 +704,10 @@ export async function measureBaseColor(blob) {
  * landmark match, distorting the clothing itself. We only want to slide,
  * rotate and scale the layer into place.
  */
-export function computeTransform(source, target) {
-  const shared = ALIGNMENT_ANCHORS.filter(
+export function computeTransform(source, target, category = null) {
+  const wanted = ALIGNMENT_ANCHORS[category] || DEFAULT_ALIGNMENT_ANCHORS;
+
+  const shared = wanted.filter(
     (name) => name in source.points && name in target.points,
   );
 
@@ -607,10 +787,12 @@ export async function warpLayer(layerBlob, transform, width, height) {
  * single-garment outfits and can be nudged by hand; losing a paid generation
  * over a landmark miss would be far worse.
  */
-export async function alignToMaster({ layerBlob, generationBlob, masterLandmarks }) {
+export async function alignToMaster({
+  layerBlob, generationBlob, masterLandmarks, category = null,
+}) {
   try {
     const generationLandmarks = await detectLandmarks(generationBlob);
-    const transform = computeTransform(generationLandmarks, masterLandmarks);
+    const transform = computeTransform(generationLandmarks, masterLandmarks, category);
 
     const aligned = await warpLayer(
       layerBlob,

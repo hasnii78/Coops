@@ -10,7 +10,7 @@ const STATUS_COPY = {
   failed: 'Something went wrong',
 };
 
-export default function ItemTile({ item, onToggleLike, onTogglePin, onSelect, onRetry }) {
+export default function ItemTile({ item, onToggleLike, onTogglePin, onSelect, onRetry, onResume }) {
   const [url, setUrl] = useState(null);
 
   useEffect(() => {
@@ -24,6 +24,11 @@ export default function ItemTile({ item, onToggleLike, onTogglePin, onSelect, on
   }, [item.layer_path, item.photo_path]);
 
   const busy = ['queued', 'generating', 'processing'].includes(item.status);
+
+  // 'processing' means the paid step finished and the device never cut the
+  // layer. Nothing is running, so an unqualified spinner is a lie — the item is
+  // waiting for someone to pick it back up, which costs nothing.
+  const stranded = item.status === 'processing' && Boolean(item.generation_path);
 
   return (
     <article className="item-tile">
@@ -43,8 +48,22 @@ export default function ItemTile({ item, onToggleLike, onTogglePin, onSelect, on
 
       {busy || item.status === 'failed' ? (
         <div className="tile-status">
-          {busy ? <span className="spinner" aria-hidden="true" /> : null}
-          <span>{STATUS_COPY[item.status]}</span>
+          {busy && !stranded ? <span className="spinner" aria-hidden="true" /> : null}
+
+          <span>
+            {stranded ? 'Paused — nothing was lost' : STATUS_COPY[item.status]}
+          </span>
+
+          {item.status === 'failed' && item.error ? (
+            <span style={{ fontSize: '0.72rem', opacity: 0.85 }}>{item.error}</span>
+          ) : null}
+
+          {stranded ? (
+            <button type="button" className="chip" onClick={() => onResume?.(item)}>
+              Resume — free
+            </button>
+          ) : null}
+
           {item.status === 'failed' ? (
             <button type="button" className="chip" onClick={() => onRetry?.(item)}>
               Try again

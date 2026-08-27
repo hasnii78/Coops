@@ -114,9 +114,11 @@ export default function MeScreen() {
 
   const chosenByCategory = useMemo(() => {
     const map = {};
-    for (const item of picked) map[item.category] = item;
+    for (const item of picked) (map[item.category] ||= []).push(item);
     return map;
   }, [picked]);
+
+  const pickedIds = useMemo(() => new Set(picked.map((item) => item.id)), [picked]);
 
   const paint = useCallback(
     async ({ blendSeams }) => {
@@ -157,12 +159,9 @@ export default function MeScreen() {
       const same = prev.findIndex((chosen) => chosen.id === item.id);
       if (same !== -1) return prev.filter((_, index) => index !== same);
 
-      // One item per category. A replacement takes the slot the old one held
-      // rather than jumping to the end, so swapping a top does not silently
-      // renumber the rest of the outfit.
-      const slot = prev.findIndex((chosen) => chosen.category === item.category);
-      if (slot !== -1) return prev.map((chosen, index) => (index === slot ? item : chosen));
-
+      // Any number of pieces from any category. Two necklaces, a shirt under a
+      // jacket, a jacket over a jacket — the numbers already say what goes over
+      // what, so there is nothing left for a one-per-category rule to protect.
       return [...prev, item];
     });
   }
@@ -367,7 +366,7 @@ export default function MeScreen() {
         <div>
           {CATEGORIES.filter(({ id }) => byCategory[id]?.length).map(({ id, label }) => {
             const open = openCategory === id;
-            const chosen = chosenByCategory[id];
+            const chosen = chosenByCategory[id] || [];
 
             return (
               <section className="accordion" key={id}>
@@ -375,7 +374,11 @@ export default function MeScreen() {
                   onClick={() => setOpenCategory(open ? null : id)}>
                   <span>{label}</span>
                   <span className="filled">
-                    {chosen ? `✓ ${chosen.name}` : `${byCategory[id].length} items`}
+                    {chosen.length === 1
+                      ? `✓ ${chosen[0].name}`
+                      : chosen.length
+                        ? `✓ ${chosen.length} chosen`
+                        : `${byCategory[id].length} items`}
                   </span>
                 </button>
 
@@ -383,7 +386,7 @@ export default function MeScreen() {
                   <div className="accordion-body">
                     {byCategory[id].map((item) => (
                       <AccordionItem key={item.id} item={item}
-                        selected={chosen?.id === item.id} onSelect={() => toggleItem(item)} />
+                        selected={pickedIds.has(item.id)} onSelect={() => toggleItem(item)} />
                     ))}
                   </div>
                 ) : null}

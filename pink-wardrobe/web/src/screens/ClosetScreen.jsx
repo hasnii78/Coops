@@ -8,7 +8,8 @@ import { IconPlus, IconSearch } from '../components/Icons';
 import { useAuth } from '../context/AuthContext';
 import { CATEGORIES } from '../lib/constants';
 import {
-  listItems, restoreItem, retryItem, softDeleteItem, toggleLike, togglePin,
+  listItems, restoreItem, resumeStrandedItems, retryItem, softDeleteItem,
+  toggleLike, togglePin,
 } from '../lib/closet';
 import { staleItems, surpriseMe } from '../lib/suggestions';
 
@@ -24,6 +25,7 @@ export default function ClosetScreen() {
   const [error, setError] = useState(null);
   const [detail, setDetail] = useState(null);
   const [undo, setUndo] = useState(null);
+  const [resuming, setResuming] = useState(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -37,6 +39,29 @@ export default function ClosetScreen() {
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Pick up anything the last session left half-finished. The generation is
+  // already bought and stored, so this only ever costs a few seconds.
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const done = await resumeStrandedItems(
+          ({ done: index, total }) => {
+            if (!cancelled && total) setResuming({ done: index, total });
+          },
+        );
+        if (!cancelled && done.length) await refresh();
+      } catch {
+        // Each item records its own reason on its row, and the tile shows it.
+      } finally {
+        if (!cancelled) setResuming(null);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [refresh]);
 
   const visible = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -92,6 +117,16 @@ export default function ClosetScreen() {
     }
   }
 
+  async function handleResume(item) {
+    try {
+      await retryItem(item);
+    } catch (caught) {
+      setError(caught.message);
+    } finally {
+      await refresh();
+    }
+  }
+
   async function handleRetry(item) {
     try {
       await retryItem(item);
@@ -129,6 +164,16 @@ export default function ClosetScreen() {
 
       <main className="app-main stack">
         {error ? <div className="error-banner" role="alert">{error}</div> : null}
+
+        {resuming ? (
+          <div className="card row" role="status" style={{ gap: 'var(--space-3)' }}>
+            <span className="spinner" aria-hidden="true" />
+            <span>
+              Finishing {resuming.done + 1} of {resuming.total} left over from
+              last time. No credits — this part runs on your phone.
+            </span>
+          </div>
+        ) : null}
 
         {searchOpen ? (
           <input
@@ -211,6 +256,7 @@ export default function ClosetScreen() {
                   await togglePin(target.id, pinned);
                 }}
                 onRetry={handleRetry}
+                onResume={handleResume}
                 onSelect={setDetail}
               />
             ))}
@@ -223,7 +269,8 @@ export default function ClosetScreen() {
       ) : null}
 
       {detail ? (
-        <ItemSheet item={detail} onClose={() => setDetail(null)} onDelete={handleDelete} />
+        <ItemSheet item={detail} onClose={() => setDetail(null)} onDelete={handleDelete}
+          onChanged={refresh} />
       ) : null}
 
       {undo ? (
