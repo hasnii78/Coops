@@ -29,19 +29,25 @@ export default function MeScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [staleCount, setStaleCount] = useState(0);
 
   useEffect(() => {
     listItems()
       .then((all) => {
-        const ready = all.filter((item) => item.status === 'ready' && !item.retired);
-        setItems(ready);
+        // A stale layer is fitted to a pose that no longer exists, so it
+        // would stack visibly wrong. Excluded rather than shown misaligned.
+        const usable = all.filter(
+          (item) => item.status === 'ready' && !item.retired && !item.needs_regeneration,
+        );
+        setStaleCount(all.filter((item) => item.needs_regeneration && !item.retired).length);
+        setItems(usable);
 
         // Arriving from Remix: preselect the outfit so swapping one piece
         // reuses the existing layers rather than rebuilding anything.
         const preselect = location.state?.preselectItemIds;
         if (preselect?.length) {
           const chosen = {};
-          for (const item of ready) {
+          for (const item of usable) {
             if (preselect.includes(item.id)) chosen[item.category] = item;
           }
           setSelected(chosen);
@@ -185,7 +191,16 @@ export default function MeScreen() {
         <main className="app-main stack">
           {error ? <div className="error-banner" role="alert">{error}</div> : null}
 
-          <div className="builder-avatar">
+          {staleCount > 0 ? (
+          <div className="error-banner" role="status">
+            {staleCount === 1
+              ? '1 piece is hidden because it was fitted to your previous avatar.'
+              : `${staleCount} pieces are hidden because they were fitted to your previous avatar.`}
+            {' '}Update them from Profile → Settings.
+          </div>
+        ) : null}
+
+        <div className="builder-avatar">
             {avatarUrl ? (
               <img src={avatarUrl} alt="Your avatar" />
             ) : (
@@ -212,6 +227,15 @@ export default function MeScreen() {
 
       <main className="app-main stack">
         {error ? <div className="error-banner" role="alert">{error}</div> : null}
+
+        {staleCount > 0 ? (
+          <div className="error-banner" role="status">
+            {staleCount === 1
+              ? '1 piece is hidden because it was fitted to your previous avatar.'
+              : `${staleCount} pieces are hidden because they were fitted to your previous avatar.`}
+            {' '}Update them from Profile → Settings.
+          </div>
+        ) : null}
 
         <div className="builder-avatar">
           <canvas ref={canvasRef} aria-label="Outfit preview" />

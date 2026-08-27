@@ -10,7 +10,10 @@ import { supabase, callFunction } from '../supabase';
 import { compressImage } from './images';
 import { GENERATION_BLOCKED } from './constants';
 import { BUCKET_LAYERS, BUCKET_WARDROBE, download, remove, upload } from './storage';
-import { alignToMaster, checkAvatarQuality, dominantColor, segmentGarment } from './vision';
+import {
+  alignToMaster, checkAvatarQuality, detectLandmarks, dominantColor,
+  measureBaseColor, segmentGarment,
+} from './vision';
 
 async function requireUserId() {
   const { data: { user } } = await supabase.auth.getUser();
@@ -24,7 +27,13 @@ async function requireUserId() {
  * Upload and lock the master pose template.
  *
  * Quality is checked on-device before anything is stored, so a rejected photo
- * never touches the bucket.
+ * never touches the bucket. The base layer's colour is measured here too, and
+ * every garment layer is later cut against it.
+ *
+ * Replacing an existing avatar invalidates every layer, since each is warped
+ * to a pose that no longer exists. Those items are flagged rather than left to
+ * stack wrongly with no explanation; the caller then offers the choice of what
+ * to do about them.
  */
 export async function uploadAvatar(file) {
   const userId = await requireUserId();
@@ -38,7 +47,18 @@ export async function uploadAvatar(file) {
     throw error;
   }
 
-  const path = `${userId}/avatar/master.jpg`;
+  const baseColor = await measureBaseColor(compressed);
+
+  const { data: existing } = await supabase
+    .from('profiles')
+    .select('avatar_path, avatar_version')
+    .eq('id', userId)
+    .single();
+
+  const isReplacement = Boolean(existing?.avatar_path);
+  const nextVersion = (existing?.avatar_version ?? 1) + (isReplacement ? 1 : 0);
+
+  const path = `${userId}/avatar/master-v${nextVersion}.jpg`;
   await upload(BUCKET_WARDROBE, path, compressed, 'image/jpeg');
 
   const { error } = await supabase
@@ -46,12 +66,104 @@ export async function uploadAvatar(file) {
     .update({
       avatar_path: path,
       avatar_landmarks: landmarks,
+      avatar_base_color: baseColor,
+      avatar_version: nextVersion,
       avatar_locked_at: new Date().toISOString(),
     })
     .eq('id', userId);
 
   if (error) throw error;
-  return path;
+
+  let staleCount = 0;
+
+  if (isReplacement) {
+    const { data: stale } = await supabase
+      .from('items')
+      .update({ needs_regeneration: true })
+      .eq('user_id', userId)
+      .is('deleted_at', null)
+      .neq('status', 'catalogued')
+      .select('id');
+
+    staleCount = stale?.length ?? 0;
+  }
+
+  return { path, baseColor, isReplacement, staleCount };
+}
+
+/** Items whose layer no longer matches the current avatar. */
+export async function listStaleItems() {
+  const { data, error } = await supabase
+    .from('items')
+    .select('*')
+    .eq('needs_regeneration', true)
+    .is('deleted_at', null);
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+/**
+ * Regenerate every stale layer against the current avatar.
+ *
+ * One FASHN call per item — the saved generation shows the old body in the old
+ * pose, so it cannot be reused. Sequential rather than parallel: each costs a
+ * credit and holds a function instance, and a partial failure should not take
+ * the rest down with it.
+ */
+export async function regenerateStaleItems(onProgress) {
+  const stale = await listStaleItems();
+  const results = [];
+
+  for (const [index, item] of stale.entries()) {
+    onProgress?.({ done: index, total: stale.length, name: item.name });
+
+    try {
+      // Clear the old generation so process-garment does not short-circuit on
+      // its idempotency check and hand back the stale layer.
+      await supabase
+        .from('items')
+        .update({ generation_path: null, layer_path: null, status: 'queued' })
+        .eq('id', item.id);
+
+      const result = await callFunction('process-garment', { itemId: item.id });
+
+      await finishProcessing({
+        ...item,
+        generation_path: result.generationPath,
+      });
+
+      await supabase
+        .from('items')
+        .update({ needs_regeneration: false })
+        .eq('id', item.id);
+
+      results.push({ ok: true, name: item.name });
+    } catch (error) {
+      results.push({ ok: false, name: item.name, error: error.message });
+    }
+  }
+
+  onProgress?.({ done: stale.length, total: stale.length });
+  return results;
+}
+
+/**
+ * Move every stale item to the recycle bin.
+ *
+ * Recycle bin rather than permanent deletion, so a hasty choice is reversible
+ * for fifteen days. A restored item is still stale and keeps its flag.
+ */
+export async function discardStaleItems() {
+  const { data, error } = await supabase
+    .from('items')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('needs_regeneration', true)
+    .is('deleted_at', null)
+    .select('id');
+
+  if (error) throw error;
+  return data?.length ?? 0;
 }
 
 // ----------------------------------------------------------------- items
@@ -77,7 +189,7 @@ export async function finishProcessing(item) {
 
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('avatar_landmarks')
+    .select('avatar_landmarks, avatar_base_color, avatar_version')
     .eq('id', userId)
     .single();
 
@@ -85,8 +197,19 @@ export async function finishProcessing(item) {
 
   const generationBlob = await download(item.generation_path, BUCKET_WARDROBE);
 
-  // Step 4 — cut the garment out.
-  const cutout = await segmentGarment(generationBlob, item.category);
+  // Step 4 — cut the garment out. Landmarks are detected on the generation
+  // itself, not the avatar: the band has to follow the body in THIS image.
+  let generationLandmarks = null;
+  try {
+    generationLandmarks = await detectLandmarks(generationBlob);
+  } catch {
+    // No landmarks means no band; the class and colour filters still apply.
+  }
+
+  const cutout = await segmentGarment(generationBlob, item.category, {
+    landmarks: generationLandmarks,
+    baseColor: profile.avatar_base_color,
+  });
 
   // Step 5 — align it to the master template.
   const { blob: aligned, meta } = await alignToMaster({
@@ -109,6 +232,8 @@ export async function finishProcessing(item) {
       alignment: meta,
       color,
       processed_at: new Date().toISOString(),
+      needs_regeneration: false,
+      avatar_version: profile.avatar_version ?? 1,
     })
     .eq('id', item.id)
     .select()

@@ -35,6 +35,12 @@ export default function ItemTile({ item, onToggleLike, onTogglePin, onSelect, on
         {url ? <img src={url} alt={item.name} loading="lazy" /> : <div style={{ aspectRatio: '3 / 4', background: 'var(--c-50)' }} />}
       </button>
 
+      {item.needs_regeneration && !busy ? (
+        <div className="tile-status" style={{ background: 'color-mix(in srgb, var(--c-900) 55%, transparent)' }}>
+          <span>Needs updating<br />for your new avatar</span>
+        </div>
+      ) : null}
+
       {busy || item.status === 'failed' ? (
         <div className="tile-status">
           {busy ? <span className="spinner" aria-hidden="true" /> : null}

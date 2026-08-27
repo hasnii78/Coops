@@ -4,7 +4,9 @@ import { supabase } from '../supabase';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { THEMES, TEXT_SIZES } from '../lib/constants';
-import { listItems, listRecycleBin, restoreItem } from '../lib/closet';
+import { listItems, listRecycleBin, listStaleItems, restoreItem } from '../lib/closet';
+import ChangeAvatarSheet from '../components/ChangeAvatarSheet';
+import StaleItemsSheet from '../components/StaleItemsSheet';
 import { signedUrl } from '../lib/storage';
 import { costPerWear, findGaps } from '../lib/suggestions';
 import { signOut } from '../lib/auth';
@@ -19,10 +21,18 @@ export default function ProfileScreen() {
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState(null);
   const [avatarUrl, setAvatarUrl] = useState(null);
+  const [changingAvatar, setChangingAvatar] = useState(false);
+  const [staleCount, setStaleCount] = useState(0);
+  const [showStale, setShowStale] = useState(false);
+
+  const refreshStale = () => {
+    listStaleItems().then((stale) => setStaleCount(stale.length)).catch(() => {});
+  };
 
   useEffect(() => {
     listItems().then(setItems).catch((caught) => setError(caught.message));
     listRecycleBin().then(setBin).catch(() => {});
+    refreshStale();
   }, []);
 
   useEffect(() => { setDisplayName(profile?.display_name || ''); }, [profile?.display_name]);
@@ -58,6 +68,24 @@ export default function ProfileScreen() {
       <header className="app-header"><h1>Profile</h1></header>
       <main className="app-main stack">
         {error ? <div className="error-banner" role="alert">{error}</div> : null}
+
+        {staleCount > 0 ? (
+          <div className="error-banner stack" role="status">
+            <strong>
+              {staleCount === 1
+                ? '1 piece needs updating'
+                : `${staleCount} pieces need updating`}
+            </strong>
+            <span style={{ fontSize: 'var(--text-sm)' }}>
+              They were fitted to your previous avatar, so they will not stack
+              correctly until they are regenerated.
+            </span>
+            <button type="button" className="btn" style={{ marginTop: 'var(--space-2)' }}
+              onClick={() => setShowStale(true)}>
+              Sort this out
+            </button>
+          </div>
+        ) : null}
 
         <div className="card row" style={{ gap: 'var(--space-4)' }}>
           {avatarUrl ? (
@@ -119,6 +147,11 @@ export default function ProfileScreen() {
               ))
           )}
         </section>
+
+        <button type="button" className="card row-between"
+          onClick={() => setChangingAvatar(true)} style={{ textAlign: 'left' }}>
+          <strong>Change avatar</strong><span className="muted">›</span>
+        </button>
 
         <button type="button" className="card row-between"
           onClick={() => setPanel(panel === 'names' ? null : 'names')}
@@ -195,6 +228,31 @@ export default function ProfileScreen() {
 
         <button type="button" className="btn btn-ghost" onClick={signOut}>Log out</button>
       </main>
+
+      {changingAvatar ? (
+        <ChangeAvatarSheet
+          onClose={() => setChangingAvatar(false)}
+          onChanged={(count) => {
+            setChangingAvatar(false);
+            refreshProfile();
+            if (count > 0) {
+              setStaleCount(count);
+              setShowStale(true);
+            }
+          }}
+        />
+      ) : null}
+
+      {showStale && staleCount > 0 ? (
+        <StaleItemsSheet
+          count={staleCount}
+          onClose={() => setShowStale(false)}
+          onDone={() => {
+            refreshStale();
+            listItems().then(setItems).catch(() => {});
+          }}
+        />
+      ) : null}
     </>
   );
 }

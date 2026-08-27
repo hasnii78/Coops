@@ -40,7 +40,19 @@ const ANCHORS = {
   rightShoulder: 12,
   leftHip: 23,
   rightHip: 24,
+  leftKnee: 25,
+  rightKnee: 26,
+  leftAnkle: 27,
+  rightAnkle: 28,
 };
+
+/**
+ * Shoulders and hips are the alignment anchors: they stay put whatever the
+ * garment. Knees and ankles move too much with hem length to align against,
+ * but they are exactly what a band needs, so they are detected and used only
+ * for cutting.
+ */
+const ALIGNMENT_ANCHORS = ['leftShoulder', 'rightShoulder', 'leftHip', 'rightHip'];
 
 const MIN_VISIBILITY = 0.5;
 
@@ -200,7 +212,120 @@ export async function checkAvatarQuality(blob) {
  * included for the accessory category and excluded otherwise, so a necklace
  * does not ride along with every shirt.
  */
-export async function segmentGarment(source, category) {
+/**
+ * Vertical extent each category occupies, as fractions between named
+ * landmarks. A garment is cut to its own band so it cannot carry another
+ * garment along with it — a top that keeps every clothing pixel also keeps
+ * whatever trousers the generator invented below it.
+ *
+ * `from` and `to` are [landmark, offset] where the offset is a fraction of
+ * shoulder-to-hip distance, so the bands scale with the person.
+ */
+const BANDS = {
+  tops:        { from: ['shoulder', -0.45], to: ['hip', 0.35] },
+  gym_wear:    { from: ['shoulder', -0.45], to: ['hip', 0.35] },
+  outerwear:   { from: ['shoulder', -0.55], to: ['knee', -0.25] },
+  bottoms:     { from: ['hip', -0.30], to: ['ankle', 0.30] },
+  dresses:     { from: ['shoulder', -0.45], to: ['ankle', 0.20] },
+  swimwear:    { from: ['shoulder', -0.30], to: ['hip', 0.60] },
+  shoes:       { from: ['ankle', -0.35], to: ['ankle', 2.0] },
+  accessories: null,   // separated by class, not position
+  undergarments: { from: ['shoulder', 0.2], to: ['hip', 0.5] },
+};
+
+function midpointY(points, a, b) {
+  const pa = points[a];
+  const pb = points[b];
+  if (pa && pb) return (pa[1] + pb[1]) / 2;
+  return (pa || pb)?.[1] ?? null;
+}
+
+/**
+ * Turn a band definition into pixel bounds for this particular body.
+ * Returns null when the landmarks needed are missing, in which case the caller
+ * falls back to keeping the whole height rather than cutting blindly.
+ */
+function bandBounds(category, landmarks) {
+  const band = BANDS[category];
+  if (!band || !landmarks) return null;
+
+  const p = landmarks.points;
+  const shoulder = midpointY(p, 'leftShoulder', 'rightShoulder');
+  const hip = midpointY(p, 'leftHip', 'rightHip');
+  const knee = midpointY(p, 'leftKnee', 'rightKnee');
+  const ankle = midpointY(p, 'leftAnkle', 'rightAnkle');
+
+  if (shoulder == null || hip == null) return null;
+
+  // Torso height is the natural scale for a body: it barely changes with
+  // camera distance relative to the rest of the frame.
+  const torso = Math.abs(hip - shoulder) || landmarks.height * 0.25;
+
+  const anchors = {
+    shoulder,
+    hip,
+    // Estimate anything MediaPipe could not see, rather than giving up.
+    knee: knee ?? hip + torso * 1.1,
+    ankle: ankle ?? hip + torso * 2.2,
+  };
+
+  const resolve = ([name, offset]) => anchors[name] + offset * torso;
+
+  return {
+    top: Math.max(0, resolve(band.from)),
+    bottom: Math.min(landmarks.height, resolve(band.to)),
+  };
+}
+
+/** Squared distance in Lab, for comparing a pixel to the base colour. */
+function labDistanceSq(lab, r, g, b) {
+  const p = rgbToLab(r, g, b);
+  const dl = p[0] - lab[0];
+  const da = p[1] - lab[1];
+  const db = p[2] - lab[2];
+  return dl * dl + da * da + db * db;
+}
+
+function rgbToLab(r, g, b) {
+  const lin = (c) => {
+    const v = c / 255;
+    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  const R = lin(r);
+  const G = lin(g);
+  const B = lin(b);
+
+  let X = (R * 0.4124 + G * 0.3576 + B * 0.1805) / 0.95047;
+  let Y = R * 0.2126 + G * 0.7152 + B * 0.0722;
+  let Z = (R * 0.0193 + G * 0.1192 + B * 0.9505) / 1.08883;
+
+  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  X = f(X); Y = f(Y); Z = f(Z);
+
+  return [116 * Y - 16, 500 * (X - Y), 200 * (Y - Z)];
+}
+
+// Below this Lab distance a pixel is treated as the base layer rather than the
+// garment. Generous enough to absorb shading and JPEG noise on the bodysuit,
+// tight enough that a genuinely different colour survives.
+const BASE_COLOUR_TOLERANCE = 22;
+
+/**
+ * Cut the garment out of a generated image.
+ *
+ * Three filters, each removing something the others cannot:
+ *
+ *   class    — clothing pixels, or accessory pixels for an accessory. These are
+ *              different MediaPipe classes, so a necklace and a shirt separate
+ *              even though they overlap.
+ *   band     — the vertical extent this category occupies, from real landmarks.
+ *              A top cannot contain trousers.
+ *   baseline — pixels matching the base layer worn in the avatar photo. What
+ *              the generator left uncovered is not part of the garment.
+ */
+export async function segmentGarment(source, category, options = {}) {
+  const { landmarks = null, baseColor = null } = options;
+
   const bitmap = await toBitmap(source);
   const segmenter = await getSegmenter();
   const result = segmenter.segment(bitmap);
@@ -222,21 +347,47 @@ export async function segmentGarment(source, category) {
   const image = context.getImageData(0, 0, bitmap.width, bitmap.height);
   const pixels = image.data;
 
-  const keepAccessories = category === 'accessories';
+  // An accessory keeps ONLY accessory pixels. Keeping clothes as well — as an
+  // earlier version did — meant a necklace layer carried the entire outfit the
+  // generator had drawn around it.
+  const isAccessory = category === 'accessories';
+  const wantedClass = isAccessory ? CLASS_ACCESSORIES : CLASS_CLOTHES;
+
+  const bounds = bandBounds(category, landmarks);
+  const top = bounds ? bounds.top : 0;
+  const bottom = bounds ? bounds.bottom : bitmap.height;
+
+  const baseLab = baseColor ? rgbToLab(baseColor.r, baseColor.g, baseColor.b) : null;
+  const toleranceSq = BASE_COLOUR_TOLERANCE * BASE_COLOUR_TOLERANCE;
+
   const scaleX = maskWidth / bitmap.width;
   const scaleY = maskHeight / bitmap.height;
 
   for (let y = 0; y < bitmap.height; y += 1) {
+    const inBand = y >= top && y <= bottom;
     const maskRow = Math.min(maskHeight - 1, (y * scaleY) | 0) * maskWidth;
 
     for (let x = 0; x < bitmap.width; x += 1) {
+      const offset = (y * bitmap.width + x) * 4;
+
+      if (!inBand) {
+        pixels[offset + 3] = 0;
+        continue;
+      }
+
       const klass = maskData[maskRow + Math.min(maskWidth - 1, (x * scaleX) | 0)];
 
-      const keep =
-        klass === CLASS_CLOTHES || (keepAccessories && klass === CLASS_ACCESSORIES);
+      if (klass !== wantedClass) {
+        pixels[offset + 3] = 0;
+        continue;
+      }
 
-      if (!keep) {
-        pixels[(y * bitmap.width + x) * 4 + 3] = 0;
+      if (
+        baseLab &&
+        labDistanceSq(baseLab, pixels[offset], pixels[offset + 1], pixels[offset + 2]) <
+          toleranceSq
+      ) {
+        pixels[offset + 3] = 0;
       }
     }
   }
@@ -247,6 +398,76 @@ export async function segmentGarment(source, category) {
   featherEdges(context, bitmap.width, bitmap.height);
 
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+}
+
+/**
+ * Measure the base layer worn in the avatar photo.
+ *
+ * Measured rather than assumed: it adapts to whatever was actually worn and to
+ * the light it was shot in, which a hardcoded swatch cannot. Also reports how
+ * plain the garment is, since a patterned base spreads the colour cluster and
+ * weakens every subtraction that depends on it.
+ */
+export async function measureBaseColor(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const segmenter = await getSegmenter();
+  const result = segmenter.segment(bitmap);
+
+  const mask = result.categoryMask;
+  if (!mask) {
+    result.close?.();
+    return null;
+  }
+
+  const maskData = mask.getAsUint8Array();
+  const canvas = canvasFor(bitmap.width, bitmap.height);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(bitmap, 0, 0);
+  const { data } = context.getImageData(0, 0, bitmap.width, bitmap.height);
+
+  const scaleX = mask.width / bitmap.width;
+  const scaleY = mask.height / bitmap.height;
+
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let n = 0;
+  const lums = [];
+
+  for (let y = 0; y < bitmap.height; y += 2) {
+    const maskRow = Math.min(mask.height - 1, (y * scaleY) | 0) * mask.width;
+
+    for (let x = 0; x < bitmap.width; x += 2) {
+      if (maskData[maskRow + Math.min(mask.width - 1, (x * scaleX) | 0)] !== CLASS_CLOTHES) {
+        continue;
+      }
+      const o = (y * bitmap.width + x) * 4;
+      r += data[o];
+      g += data[o + 1];
+      b += data[o + 2];
+      lums.push(0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2]);
+      n += 1;
+    }
+  }
+
+  result.close?.();
+
+  if (n < 500) return null;   // too little clothing visible to characterise
+
+  const mean = lums.reduce((sum, v) => sum + v, 0) / lums.length;
+  const spread = Math.sqrt(
+    lums.reduce((sum, v) => sum + (v - mean) ** 2, 0) / lums.length,
+  );
+
+  return {
+    r: Math.round(r / n),
+    g: Math.round(g / n),
+    b: Math.round(b / n),
+    // Above roughly 30 the garment is patterned or harshly lit, and colour
+    // subtraction will be unreliable.
+    spread: Math.round(spread),
+    plain: spread < 30,
+  };
 }
 
 /**
@@ -308,7 +529,9 @@ function featherEdges(context, width, height) {
  * rotate and scale the layer into place.
  */
 export function computeTransform(source, target) {
-  const shared = Object.keys(source.points).filter((name) => name in target.points);
+  const shared = ALIGNMENT_ANCHORS.filter(
+    (name) => name in source.points && name in target.points,
+  );
 
   if (shared.length < 2) {
     throw new VisionError(
