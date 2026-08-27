@@ -175,11 +175,28 @@ export default function MeScreen() {
     );
   }
 
+  // With no finished layers there is nothing to stack, but the avatar is still
+  // worth showing: it is the master template every garment aligns to, and
+  // seeing it is the only confirmation that the upload and pose lock worked.
   if (!items.length) {
     return (
       <>
         <header className="app-header"><h1>Me</h1></header>
-        <main className="app-main">
+        <main className="app-main stack">
+          {error ? <div className="error-banner" role="alert">{error}</div> : null}
+
+          <div className="builder-avatar">
+            {avatarUrl ? (
+              <img src={avatarUrl} alt="Your avatar" />
+            ) : (
+              <div className="empty-state"><span className="spinner" /></div>
+            )}
+          </div>
+
+          <p className="muted" style={{ textAlign: 'center', margin: 0 }}>
+            This is your avatar — every piece you add gets fitted to this exact pose.
+          </p>
+
           <EmptyState title="Nothing to try on yet">
             Add a few pieces to your closet first. Once each one has its layer,
             you can mix them here as many times as you like for free.

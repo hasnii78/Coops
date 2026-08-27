@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import Logo from '../assets/Logo';
 import { supabase } from '../supabase';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { THEMES, TEXT_SIZES } from '../lib/constants';
 import { listItems, listRecycleBin, restoreItem } from '../lib/closet';
+import { signedUrl } from '../lib/storage';
 import { costPerWear, findGaps } from '../lib/suggestions';
 import { signOut } from '../lib/auth';
 
@@ -18,6 +18,7 @@ export default function ProfileScreen() {
   const [panel, setPanel] = useState(null);
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState(null);
+  const [avatarUrl, setAvatarUrl] = useState(null);
 
   useEffect(() => {
     listItems().then(setItems).catch((caught) => setError(caught.message));
@@ -25,6 +26,12 @@ export default function ProfileScreen() {
   }, []);
 
   useEffect(() => { setDisplayName(profile?.display_name || ''); }, [profile?.display_name]);
+
+  useEffect(() => {
+    if (profile?.avatar_path) {
+      signedUrl(profile.avatar_path).then(setAvatarUrl).catch(() => {});
+    }
+  }, [profile?.avatar_path]);
 
   const stats = useMemo(() => {
     const active = items.filter((item) => !item.retired);
@@ -53,7 +60,27 @@ export default function ProfileScreen() {
         {error ? <div className="error-banner" role="alert">{error}</div> : null}
 
         <div className="card row" style={{ gap: 'var(--space-4)' }}>
-          <Logo size={56} />
+          {avatarUrl ? (
+            <img
+              src={avatarUrl}
+              alt="Your avatar"
+              width={56}
+              height={72}
+              style={{
+                objectFit: 'cover',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--c-50)',
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                width: 56, height: 72,
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--c-50)',
+              }}
+            />
+          )}
           <div>
             <strong style={{ display: 'block', fontSize: 'var(--text-lg)' }}>
               {profile?.display_name || profile?.username}
