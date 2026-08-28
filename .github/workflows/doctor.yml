@@ -187,13 +187,14 @@ jobs:
 
             missing=$(echo "$body" | jq -r '.message // empty')
             echo "::error::$table is missing a column — $missing"
-            echo "::error::Run supabase/migrations/20260827000003_avatar_change.sql in the SQL Editor."
+            echo "::error::Run the matching migration in supabase/migrations/ from the SQL Editor."
             return 1
           }
 
           fail=0
           check profiles avatar_base_color,avatar_version || fail=1
           check items    needs_regeneration,avatar_version || fail=1
+          check items    placement || fail=1
 
           if [ "$fail" -eq 1 ]; then
             echo ""
