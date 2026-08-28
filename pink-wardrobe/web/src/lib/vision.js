@@ -27,6 +27,7 @@ import {
   featherEdges,
   fillEnclosedHoles,
   keepAnchoredComponents,
+  trustsBaseline,
 } from './mask';
 
 // Models are served from the app itself so the APK works offline. See
@@ -566,8 +567,13 @@ export async function segmentGarment(source, category, options = {}) {
   const firstY = cropped ? cropped.box.top : 0;
   const lastY = cropped ? cropped.box.bottom : bitmap.height;
 
-  let kept = new Uint8Array(bitmap.width * bitmap.height);
-  let covered = 0;
+  // Built as two masks so the baseline filter can be judged and, if it is
+  // clearly misfiring, thrown away rather than trusted.
+  const inClass = new Uint8Array(bitmap.width * bitmap.height);
+  const afterBaseline = new Uint8Array(bitmap.width * bitmap.height);
+
+  let classCount = 0;
+  let baselineCount = 0;
 
   for (let y = Math.max(firstY, Math.floor(top)); y < Math.min(lastY, Math.ceil(bottom)); y += 1) {
     const row = y * bitmap.width;
@@ -579,6 +585,9 @@ export async function segmentGarment(source, category, options = {}) {
       );
       if (coverage < COVERAGE_THRESHOLD) continue;
 
+      inClass[row + x] = 1;
+      classCount += 1;
+
       const offset = (row + x) * 4;
 
       if (
@@ -589,12 +598,24 @@ export async function segmentGarment(source, category, options = {}) {
         continue;
       }
 
-      kept[row + x] = 1;
-      covered += 1;
+      afterBaseline[row + x] = 1;
+      baselineCount += 1;
     }
   }
 
   result?.close?.();
+
+  // The baseline filter removes the base garment where the new one does not
+  // cover it — a midriff below a crop top, say, which is a large but sane share
+  // of the band. Removing nearly everything means something else happened: the
+  // garment is close in colour to the base and is being deleted as if it were
+  // the base. A white shirt over a skin-toned base disappeared completely this
+  // way. Colour cannot tell the two apart, so when the filter takes this much
+  // the safer reading is that it is wrong, and it is dropped.
+  const believable = trustsBaseline(classCount, baselineCount);
+
+  let kept = believable ? afterBaseline : inClass;
+  const covered = believable ? baselineCount : classCount;
 
   kept = keepAnchoredComponents(
     kept,

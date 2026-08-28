@@ -71,6 +71,31 @@ export function classCoverage(mask, width, height, wanted, sx, sy) {
   return covered;
 }
 
+/**
+ * How much of the garment must survive the baseline filter for it to be
+ * believed.
+ *
+ * A crop top leaves most of its band showing the base garment underneath and
+ * still clears this comfortably. A garment being mistaken wholesale for the
+ * base does not.
+ */
+export const MIN_BASELINE_SURVIVAL = 0.25;
+
+/**
+ * Whether subtracting the base garment's colour produced a sane result.
+ *
+ * The filter exists to remove the base layer where the new garment does not
+ * cover it. Colour is all it has to go on, so a garment close in colour to the
+ * base is indistinguishable from the base — and a white shirt over a
+ * skin-toned base was deleted in its entirety. There is no way to tell the two
+ * apart from colour, but there is a way to notice: when the filter claims
+ * almost the whole garment, the likelier explanation is that it is wrong.
+ */
+export function trustsBaseline(classCount, baselineCount) {
+  if (!classCount) return true;
+  return baselineCount / classCount >= MIN_BASELINE_SURVIVAL;
+}
+
 /** Half coverage is the boundary — the contour a smooth edge follows. */
 export const COVERAGE_THRESHOLD = 0.5;
 

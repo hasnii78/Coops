@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   keepAnchoredComponents, fillEnclosedHoles, erodeMask, decontaminate,
-  classCoverage, COVERAGE_THRESHOLD,
+  classCoverage, COVERAGE_THRESHOLD, trustsBaseline,
 } from '../src/lib/mask.js';
 
 const W = 120, H = 200;
@@ -223,6 +223,28 @@ function area(mask) { return mask.reduce((n, v) => n + v, 0); }
 
   assert.equal(COVERAGE_THRESHOLD, 0.5);
   console.log(`9 coverage ramps smoothly across the boundary: ${ramp.map((v) => v.toFixed(2)).join(' ')}`);
+}
+
+// ---- 10. the baseline filter has to be sane to be believed ---------------
+{
+  // A white shirt over a skin-toned base: colour cannot separate them, so the
+  // filter claims essentially the whole garment. That reading is rejected.
+  assert.equal(trustsBaseline(10000, 120), false, 'a garment eaten whole is not believed');
+  assert.equal(trustsBaseline(10000, 0), false, 'nothing left at all is not believed');
+
+  // A crop top: most of its band is exposed base garment, and the filter
+  // legitimately removes that. Roughly half surviving is normal and kept.
+  assert.equal(trustsBaseline(10000, 5000), true, 'a crop top clears it comfortably');
+  assert.equal(trustsBaseline(10000, 2600), true, 'so does a very revealing one');
+
+  // The boundary itself.
+  assert.equal(trustsBaseline(10000, 2500), true, 'exactly at the threshold is kept');
+  assert.equal(trustsBaseline(10000, 2499), false, 'just under it is not');
+
+  // Nothing in class at all is a different failure, and not this one's to call.
+  assert.equal(trustsBaseline(0, 0), true, 'an empty class mask is not a baseline problem');
+
+  console.log('10 baseline filter rejected when it claims the whole garment');
 }
 
 console.log('\nall assertions passed');

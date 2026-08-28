@@ -281,7 +281,10 @@ export async function addItem({ file, name, category, price, tags = [], placemen
       category,
       price: Number(price) || 0,
       tags,
-      placement,
+      // Only sent when there is one. A garment has no placement, and omitting
+      // the key means adding a shirt still works on a database that has not
+      // taken the placement migration yet.
+      ...(placement ? { placement } : {}),
       status: catalogueOnly ? 'catalogued' : 'queued',
     })
     .select()
