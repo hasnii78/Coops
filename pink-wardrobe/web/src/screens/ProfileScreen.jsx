@@ -6,6 +6,7 @@ import { useTheme } from '../context/ThemeContext';
 import { THEMES, TEXT_SIZES } from '../lib/constants';
 import { listItems, listRecycleBin, listStaleItems, restoreItem } from '../lib/closet';
 import ChangeAvatarSheet from '../components/ChangeAvatarSheet';
+import ColourQuiz from '../components/ColourQuiz';
 import StaleItemsSheet from '../components/StaleItemsSheet';
 import { signedUrl } from '../lib/storage';
 import { costPerWear, findGaps } from '../lib/suggestions';
@@ -18,6 +19,7 @@ export default function ProfileScreen() {
   const [items, setItems] = useState([]);
   const [bin, setBin] = useState([]);
   const [panel, setPanel] = useState(null);
+  const [quizOpen, setQuizOpen] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState(null);
   const [avatarUrl, setAvatarUrl] = useState(null);
@@ -188,6 +190,26 @@ export default function ProfileScreen() {
 
         {panel === 'settings' ? (
           <div className="card stack">
+            <span className="section-title">Colour profile</span>
+            {quizOpen ? (
+              <ColourQuiz
+                initial={profile?.color_profile}
+                submitLabel="Save my colours"
+                onDone={() => setQuizOpen(false)}
+              />
+            ) : (
+              <div className="row-between">
+                <span className="muted">
+                  {profile?.color_profile?.undertone
+                    ? `${profile.color_profile.undertone} undertone`
+                    : 'Not set — outfit suggestions are guessing'}
+                </span>
+                <button type="button" className="chip" onClick={() => setQuizOpen(true)}>
+                  {profile?.color_profile?.undertone ? 'Change' : 'Answer'}
+                </button>
+              </div>
+            )}
+
             <span className="section-title">Colour theme</span>
             <div className="row" style={{ gap: 'var(--space-3)' }}>
               {THEMES.map(({ id, label, swatch }) => (

@@ -15,7 +15,7 @@ import SavedScreen from './screens/SavedScreen';
 import ProfileScreen from './screens/ProfileScreen';
 
 function Gate() {
-  const { user, profile, loading, hasAvatar } = useAuth();
+  const { user, loading, hasAvatar } = useAuth();
 
   if (loading) {
     return (
@@ -27,9 +27,13 @@ function Gate() {
 
   if (!user) return <AuthScreen />;
 
-  // The master avatar and colour quiz gate everything else — without a locked
-  // pose template there is nothing to align garment layers to.
-  if (!hasAvatar || !profile?.onboarded) return <OnboardingScreen />;
+  // Only the avatar gates the app: without a locked pose template there is
+  // nothing to align garment layers to. The colour questions feed outfit
+  // suggestions and nothing else, so they are asked once during setup and are
+  // otherwise a card in Profile. Gating on them as well meant that a failed
+  // write of a single flag — silently unchecked — sent someone back to setup on
+  // every launch, and setup began by asking for the avatar photo again.
+  if (!hasAvatar) return <OnboardingScreen />;
 
   return (
     <div className="app-shell">

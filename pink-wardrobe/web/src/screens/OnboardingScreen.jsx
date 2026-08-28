@@ -1,14 +1,8 @@
 import { useState } from 'react';
-import { supabase } from '../supabase';
 import { useAuth } from '../context/AuthContext';
 import { uploadAvatar } from '../lib/closet';
 import { inspectImage } from '../lib/images';
-
-const UNDERTONES = [
-  { id: 'warm', label: 'Warm', hint: 'Veins look green; gold suits you' },
-  { id: 'cool', label: 'Cool', hint: 'Veins look blue; silver suits you' },
-  { id: 'neutral', label: 'Neutral', hint: 'A bit of both' },
-];
+import ColourQuiz from '../components/ColourQuiz';
 
 /**
  * First-run setup: the master avatar photo, then a short colour quiz.
@@ -18,12 +12,15 @@ const UNDERTONES = [
  * getting it right the first time.
  */
 export default function OnboardingScreen() {
-  const { uid, refreshProfile } = useAuth();
-  const [step, setStep] = useState('avatar');
+  const { hasAvatar, refreshProfile } = useAuth();
+
+  // Somebody who already has an avatar is here for the questions, not for the
+  // photo. Starting them on the photo step was how a stored avatar got
+  // overwritten by an identical one, and with it every garment layer.
+  const [step, setStep] = useState(hasAvatar ? 'colors' : 'avatar');
   const [busy, setBusy] = useState(false);
   const [problems, setProblems] = useState([]);
   const [error, setError] = useState(null);
-  const [quiz, setQuiz] = useState({ undertone: '', hairColor: '', eyeColor: '' });
 
   async function handleAvatar(event) {
     const file = event.target.files?.[0];
@@ -41,7 +38,6 @@ export default function OnboardingScreen() {
       }
 
       await uploadAvatar(file);
-      await refreshProfile();
       setStep('colors');
     } catch (caught) {
       if (caught.problems) setProblems(caught.problems);
@@ -50,15 +46,6 @@ export default function OnboardingScreen() {
       setBusy(false);
       event.target.value = '';
     }
-  }
-
-  async function finishQuiz() {
-    await supabase
-      .from('profiles')
-      .update({ color_profile: quiz, onboarded: true })
-      .eq('id', uid);
-
-    await refreshProfile();
   }
 
   if (step === 'avatar') {
@@ -125,51 +112,11 @@ export default function OnboardingScreen() {
       <div className="stack">
         <h1 style={{ margin: 0, color: 'var(--c-800)' }}>A few quick colour questions</h1>
         <p className="muted" style={{ margin: 0 }}>
-          This is how outfit suggestions know what actually flatters you. Takes ten seconds.
+          This is how outfit suggestions know what actually flatters you. Takes ten
+          seconds, and you can change it later from Profile.
         </p>
 
-        <div className="stack">
-          <span className="section-title">Skin undertone</span>
-          {UNDERTONES.map(({ id, label, hint }) => (
-            <button
-              key={id}
-              type="button"
-              className="card row-between"
-              aria-pressed={quiz.undertone === id}
-              onClick={() => setQuiz((prev) => ({ ...prev, undertone: id }))}
-              style={{
-                textAlign: 'left',
-                borderColor: quiz.undertone === id ? 'var(--c-400)' : 'var(--line)',
-              }}
-            >
-              <span><strong>{label}</strong><br /><span className="muted">{hint}</span></span>
-            </button>
-          ))}
-        </div>
-
-        <label className="stack" style={{ gap: 'var(--space-1)' }}>
-          <span className="section-title">Hair colour</span>
-          <input
-            className="input"
-            value={quiz.hairColor}
-            onChange={(event) => setQuiz((prev) => ({ ...prev, hairColor: event.target.value }))}
-            placeholder="blonde, brown, black…"
-          />
-        </label>
-
-        <label className="stack" style={{ gap: 'var(--space-1)' }}>
-          <span className="section-title">Eye colour</span>
-          <input
-            className="input"
-            value={quiz.eyeColor}
-            onChange={(event) => setQuiz((prev) => ({ ...prev, eyeColor: event.target.value }))}
-            placeholder="brown, blue, green…"
-          />
-        </label>
-
-        <button className="btn" type="button" disabled={!quiz.undertone} onClick={finishQuiz}>
-          Start building my closet
-        </button>
+        <ColourQuiz submitLabel="Start building my closet" onSkip onDone={refreshProfile} />
       </div>
     </main>
   );
