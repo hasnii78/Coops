@@ -13,10 +13,12 @@ const MAX_SCALE = 4;
  * accidentally save the crop — the picture that gets written is always the
  * whole render.
  */
-export default function AvatarViewer({ children, expandable = true }) {
+export default function AvatarViewer({
+  children, expandable = true, openFull = false, onExitFull,
+}) {
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [full, setFull] = useState(false);
+  const [full, setFull] = useState(openFull);
 
   const gesture = useRef(null);
   const frame = useRef(null);
@@ -30,10 +32,19 @@ export default function AvatarViewer({ children, expandable = true }) {
   // last gesture happened to leave the view.
   useEffect(() => { reset(); }, [full, reset]);
 
+  // Opened straight into fullscreen from elsewhere — Profile taps the avatar
+  // and wants the big view, not the thumbnail with a button on it.
+  useEffect(() => { setFull(openFull); }, [openFull]);
+
+  const leave = useCallback(() => {
+    setFull(false);
+    onExitFull?.();
+  }, [onExitFull]);
+
   useEffect(() => {
     if (!full) return undefined;
 
-    const onKey = (event) => { if (event.key === 'Escape') setFull(false); };
+    const onKey = (event) => { if (event.key === 'Escape') leave(); };
     window.addEventListener('keydown', onKey);
 
     // The page behind must not scroll while a fullscreen view is open.
@@ -44,7 +55,7 @@ export default function AvatarViewer({ children, expandable = true }) {
       window.removeEventListener('keydown', onKey);
       document.body.style.overflow = previous;
     };
-  }, [full]);
+  }, [full, leave]);
 
   const clampOffset = useCallback((next, atScale) => {
     const element = frame.current;
@@ -139,7 +150,7 @@ export default function AvatarViewer({ children, expandable = true }) {
           <button type="button" className="chip" onClick={reset} disabled={scale === 1}>
             Reset
           </button>
-          <button type="button" className="chip" onClick={() => setFull(false)}>
+          <button type="button" className="chip" onClick={leave}>
             Done
           </button>
         </div>

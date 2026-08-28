@@ -44,6 +44,7 @@ export default function AddItemSheet({ onClose, onAdded }) {
           category,
           price,
           placement: needsPlacement ? placement : null,
+          generate: false,
         }));
 
         const results = await addItemsBulk(entries, (done, total) =>
@@ -59,6 +60,7 @@ export default function AddItemSheet({ onClose, onAdded }) {
         await addItem({
           file: files[0], name, category, price,
           placement: needsPlacement ? placement : null,
+          generate: false,
         });
       }
 

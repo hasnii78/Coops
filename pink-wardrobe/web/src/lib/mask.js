@@ -266,51 +266,6 @@ export function fillEnclosedHoles(kept, width, height) {
   return out;
 }
 
-/**
- * Pull the mask in by `radius` pixels.
- *
- * MediaPipe returns a 256x256 mask that gets sampled up to the full render with
- * nearest-neighbour, so the boundary lands on a coarse grid and routinely sits
- * a pixel or two outside the true edge — keeping a rim of whatever was behind
- * the garment. Eroding first absorbs that slop.
- *
- * Separable: a square structuring element is the same as a horizontal pass
- * followed by a vertical one, at a fraction of the work.
- */
-export function erodeMask(kept, width, height, radius) {
-  const rows = new Uint8Array(kept.length);
-
-  for (let y = 0; y < height; y += 1) {
-    const row = y * width;
-    for (let x = 0; x < width; x += 1) {
-      let on = 1;
-      for (let d = -radius; d <= radius; d += 1) {
-        const nx = x + d;
-        if (nx < 0 || nx >= width || !kept[row + nx]) { on = 0; break; }
-      }
-      rows[row + x] = on;
-    }
-  }
-
-  const out = new Uint8Array(kept.length);
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      let on = 1;
-      for (let d = -radius; d <= radius; d += 1) {
-        const ny = y + d;
-        if (ny < 0 || ny >= height || !rows[ny * width + x]) { on = 0; break; }
-      }
-      out[y * width + x] = on;
-    }
-  }
-
-  return out;
-}
-
-/** Pixels to pull the mask in by before feathering. */
-export const ERODE_RADIUS = 1;
-
 /** Half-width of the feather. Two pixels is a soft edge, not a gradient. */
 export const FEATHER_RADIUS = 2;
 
@@ -370,8 +325,27 @@ export function featherEdges(context, width, height, kept) {
     }
   }
 
+  // Refined against the photograph itself before it becomes alpha, so the edge
+  // follows the garment rather than the model's idea of where it is.
+  const guide = new Float32Array(count);
   for (let i = 0; i < count; i += 1) {
-    data[i * 4 + 3] = kept[i] ? Math.round(coverage[i] * 255) : 0;
+    const offset = i * 4;
+    // Perceived brightness: a collar against skin is an edge here even when the
+    // raw channel values are close.
+    guide[i] = (0.299 * data[offset] + 0.587 * data[offset + 1]
+      + 0.114 * data[offset + 2]) / 255;
+  }
+
+  const refined = guidedFilterAlpha(
+    coverage, guide, width, height, GUIDE_RADIUS, GUIDE_EPSILON,
+  );
+
+  for (let i = 0; i < count; i += 1) {
+    // Bounded by the mask, not by the feather. Bounding it by the feather made
+    // refinement one-directional — it could only ever take alpha away — and a
+    // filter that can only subtract is just another way of shrinking every
+    // garment, which is the bug that put a bare toe under a shoe.
+    data[i * 4 + 3] = kept[i] ? Math.round(refined[i] * 255) : 0;
   }
 
   decontaminate(data, kept, width, height);
@@ -491,16 +465,150 @@ export function rgbToLab(r, g, b) {
  * actually is. A white shirt fails the second test: the chest used to be cream
  * and now is white.
  */
+/** Squared distance between two Lab colours, ignoring lightness. */
+export function chromaDistanceSq(a, b) {
+  const da = a[1] - b[1];
+  const db = a[2] - b[2];
+  return da * da + db * db;
+}
+
 export function isUncoveredBase(pixel, base, avatarPixel, baseTolerance, unchangedTolerance) {
   if (!base) return false;
 
-  const looksLikeBase =
-    labDistanceSq(base, pixel[0], pixel[1], pixel[2]) < baseTolerance * baseTolerance;
+  const lab = rgbToLab(pixel[0], pixel[1], pixel[2]);
 
-  if (!looksLikeBase) return false;
+  // Both comparisons ignore lightness and use colour alone.
+  //
+  // A garment thrown over the base does not only cover it, it shades it: the
+  // bodysuit under an open jacket goes much darker without changing colour at
+  // all. Measured on all three channels, that shading reads both as "not the
+  // base colour any more" and as "something was added here" — and a patch of
+  // shaded bodysuit duly survived into the jacket's layer as a tan blob.
+  //
+  // Cream in shadow is still cream. A white shirt over cream is a different
+  // colour whether it is lit or shaded, so nothing is lost by looking away from
+  // brightness, and the shading stops lying.
+  if (chromaDistanceSq(lab, base) >= baseTolerance * baseTolerance) return false;
   if (!avatarPixel) return true;
 
   const avatarLab = rgbToLab(avatarPixel[0], avatarPixel[1], avatarPixel[2]);
-  return labDistanceSq(avatarLab, pixel[0], pixel[1], pixel[2])
-    < unchangedTolerance * unchangedTolerance;
+  return chromaDistanceSq(lab, avatarLab) < unchangedTolerance * unchangedTolerance;
 }
+
+/**
+ * Pull the alpha edge onto the real edge of the garment.
+ *
+ * The mask comes from a model that works at 256x256 and knows roughly where a
+ * garment is; the photograph knows exactly. A guided filter reconciles the two:
+ * within a small window it fits alpha as a straight line against the image's
+ * own brightness, so alpha is forced to change where the picture changes and to
+ * stay flat where the picture is flat. The boundary snaps onto the collar, the
+ * hem, the sole — instead of sitting a pixel or two off it in a soft haze.
+ *
+ * `epsilon` decides how much variation in the image counts as an edge rather
+ * than as texture. Small values follow every thread; large values ignore the
+ * garment's own weave and follow only its outline, which is what is wanted.
+ */
+export function guidedFilterAlpha(alpha, guide, width, height, radius, epsilon) {
+  const count = width * height;
+
+  const meanGuide = boxBlur(guide, width, height, radius);
+  const meanAlpha = boxBlur(alpha, width, height, radius);
+
+  const guideSquared = new Float32Array(count);
+  const product = new Float32Array(count);
+
+  for (let i = 0; i < count; i += 1) {
+    guideSquared[i] = guide[i] * guide[i];
+    product[i] = guide[i] * alpha[i];
+  }
+
+  const meanGuideSquared = boxBlur(guideSquared, width, height, radius);
+  const meanProduct = boxBlur(product, width, height, radius);
+
+  const slope = new Float32Array(count);
+  const offset = new Float32Array(count);
+
+  for (let i = 0; i < count; i += 1) {
+    const variance = meanGuideSquared[i] - meanGuide[i] * meanGuide[i];
+    const covariance = meanProduct[i] - meanGuide[i] * meanAlpha[i];
+
+    slope[i] = covariance / (variance + epsilon);
+    offset[i] = meanAlpha[i] - slope[i] * meanGuide[i];
+  }
+
+  const meanSlope = boxBlur(slope, width, height, radius);
+  const meanOffset = boxBlur(offset, width, height, radius);
+
+  const out = new Float32Array(count);
+  for (let i = 0; i < count; i += 1) {
+    const value = meanSlope[i] * guide[i] + meanOffset[i];
+    out[i] = value < 0 ? 0 : value > 1 ? 1 : value;
+  }
+
+  return out;
+}
+
+/** Separable box blur over a float plane. */
+function boxBlur(source, width, height, radius) {
+  const rows = new Float32Array(width * height);
+  const out = new Float32Array(width * height);
+
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width;
+    let total = 0;
+    let samples = 0;
+
+    // A running sum: each step adds one column and drops one, so the cost does
+    // not grow with the radius.
+    for (let x = 0; x <= radius && x < width; x += 1) {
+      total += source[row + x];
+      samples += 1;
+    }
+
+    for (let x = 0; x < width; x += 1) {
+      rows[row + x] = total / samples;
+
+      const leaving = x - radius;
+      const entering = x + radius + 1;
+
+      if (leaving >= 0) { total -= source[row + leaving]; samples -= 1; }
+      if (entering < width) { total += source[row + entering]; samples += 1; }
+    }
+  }
+
+  for (let x = 0; x < width; x += 1) {
+    let total = 0;
+    let samples = 0;
+
+    for (let y = 0; y <= radius && y < height; y += 1) {
+      total += rows[y * width + x];
+      samples += 1;
+    }
+
+    for (let y = 0; y < height; y += 1) {
+      out[y * width + x] = total / samples;
+
+      const leaving = y - radius;
+      const entering = y + radius + 1;
+
+      if (leaving >= 0) { total -= rows[leaving * width + x]; samples -= 1; }
+      if (entering < height) { total += rows[entering * width + x]; samples += 1; }
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Radius and edge sensitivity for the alpha refinement.
+ *
+ * Radius chosen by measurement, not by taste. Against a mask whose edge sat a
+ * pixel off the garment's real one, every radius from 1 to 4 moved it onto the
+ * right column — but 2, 3 and 4 also widened the transition from nine pixels to
+ * eleven, thirteen and fifteen. A wider transition is a hazier garment
+ * boundary, which is the opposite of the point. Radius 1 repositions the edge
+ * and leaves its sharpness alone. Epsilon made no difference to either.
+ */
+export const GUIDE_RADIUS = 1;
+export const GUIDE_EPSILON = 1e-3;

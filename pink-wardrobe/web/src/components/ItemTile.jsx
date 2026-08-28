@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import LayerThumb from './LayerThumb';
 import { signedUrl } from '../lib/storage';
 import { IconHeart, IconPin } from './Icons';
 
@@ -37,7 +38,12 @@ export default function ItemTile({ item, onToggleLike, onTogglePin, onSelect, on
         onClick={() => onSelect?.(item)}
         style={{ display: 'block', width: '100%', padding: 0, border: 'none', background: 'none' }}
       >
-        {url ? <img src={url} alt={item.name} loading="lazy" /> : <div style={{ aspectRatio: '3 / 4', background: 'var(--c-50)' }} />}
+        {url ? (
+          <LayerThumb url={url} alt={item.name}
+            bounds={item.layer_path ? item.alignment?.content : null} />
+        ) : (
+          <div style={{ aspectRatio: '3 / 4', background: 'var(--c-50)' }} />
+        )}
       </button>
 
       {item.needs_regeneration && !busy ? (

@@ -11,7 +11,8 @@ import { compressImage } from './images';
 import { GENERATION_BLOCKED } from './constants';
 import { BUCKET_LAYERS, BUCKET_WARDROBE, download, remove, upload } from './storage';
 import {
-  alignToMaster, checkAvatarQuality, detectLandmarks, dominantColor,
+  alignToMaster,
+  contentBounds, checkAvatarQuality, detectLandmarks, dominantColor,
   measureBaseColor, segmentGarment,
 } from './vision';
 
@@ -255,13 +256,14 @@ async function cutAndSave(item, profile, userId) {
   await upload(BUCKET_LAYERS, layerPath, aligned, 'image/png');
 
   const color = await dominantColor(aligned);
+  const bounds = await contentBounds(aligned);
 
   const { data, error } = await supabase
     .from('items')
     .update({
       status: 'ready',
       layer_path: layerPath,
-      alignment: meta,
+      alignment: { ...meta, content: bounds },
       color,
       processed_at: new Date().toISOString(),
       needs_regeneration: false,
@@ -281,7 +283,9 @@ async function cutAndSave(item, profile, userId) {
  * Steps 1-3 (moderation, FASHN, immediate persist) happen in the Edge
  * Function. Steps 4-6 happen here.
  */
-export async function addItem({ file, name, category, price, tags = [], placement = null }) {
+export async function addItem({
+  file, name, category, price, tags = [], placement = null, generate = true,
+}) {
   const userId = await requireUserId();
   const compressed = await compressImage(file);
 
@@ -315,6 +319,12 @@ export async function addItem({ file, name, category, price, tags = [], placemen
     return { ...item, photo_path: photoPath };
   }
 
+  // Queued, not generated. Adding a piece costs nothing and takes a second;
+  // generating its layer costs a credit and takes twenty. Keeping them apart
+  // means several things can be added in one sitting and paid for together,
+  // deliberately, instead of each upload quietly spending money on its own.
+  if (!generate) return { ...item, photo_path: photoPath };
+
   const result = await callFunction('process-garment', { itemId: item.id });
 
   if (result.status === 'ready') {
@@ -341,6 +351,44 @@ export async function addItemsBulk(entries, onProgress) {
     onProgress?.(index + 1, entries.length);
   }
 
+  return results;
+}
+
+/** Pieces added but not yet generated. Each will cost one credit. */
+export async function listQueuedItems() {
+  const { data, error } = await supabase
+    .from('items')
+    .select('*')
+    .eq('status', 'queued')
+    .is('generation_path', null)
+    .is('deleted_at', null);
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+/**
+ * Generate every queued piece, one after another.
+ *
+ * Sequential on purpose: each one costs a credit, and firing a batch at once
+ * risks rate limits for no visible gain.
+ */
+export async function generateQueuedItems(onProgress) {
+  const queued = await listQueuedItems();
+  const results = [];
+
+  for (const [index, item] of queued.entries()) {
+    onProgress?.({ done: index, total: queued.length, name: item.name });
+
+    try {
+      await retryItem(item);
+      results.push({ ok: true, name: item.name });
+    } catch (error) {
+      results.push({ ok: false, name: item.name, error: error.message });
+    }
+  }
+
+  onProgress?.({ done: queued.length, total: queued.length });
   return results;
 }
 

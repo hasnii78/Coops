@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import {
-  keepAnchoredComponents, fillEnclosedHoles, erodeMask, decontaminate,
+  keepAnchoredComponents, fillEnclosedHoles, decontaminate,
   classCoverage, COVERAGE_THRESHOLD, trustsBaseline, isUncoveredBase, rgbToLab,
+  guidedFilterAlpha, GUIDE_RADIUS, GUIDE_EPSILON,
 } from '../src/lib/mask.js';
 
 const W = 120, H = 200;
@@ -95,16 +96,6 @@ function area(mask) { return mask.reduce((n, v) => n + v, 0); }
   console.log('5 small hole filled, large gap preserved');
 }
 
-// ---- 6. erosion pulls in by exactly one pixel ----------------------------
-{
-  const mask = rect(blank(), 30, 50, 90, 130);
-  const out = erodeMask(mask, W, H, 1);
-  assert.equal(out[50 * W + 60], 0, 'the old boundary row is gone');
-  assert.equal(out[51 * W + 60], 1, 'one row in is kept');
-  assert.equal(out[50 * W + 30], 0);
-  console.log('6 erode removes exactly one pixel of boundary');
-}
-
 // ---- 7. decontamination removes the background trace --------------------
 {
   // A vertical edge: skin (220,180,150) on the left, garment (20,20,200) on
@@ -150,9 +141,12 @@ function area(mask) { return mask.reduce((n, v) => n + v, 0); }
 // ---- 8. the feather never spreads outward -------------------------------
 {
   const { featherEdges } = await import('../src/lib/mask.js');
-  const w = 20, h = 20;
+
+  // Big enough that the middle is genuinely interior: the edge refinement
+  // works over a window, so on a tiny square every pixel is a boundary pixel.
+  const w = 60, h = 60;
   const kept = new Uint8Array(w * h);
-  for (let y = 5; y < 15; y += 1) for (let x = 5; x < 15; x += 1) kept[y * w + x] = 1;
+  for (let y = 15; y < 45; y += 1) for (let x = 15; x < 45; x += 1) kept[y * w + x] = 1;
 
   const data = new Uint8ClampedArray(w * h * 4);
   for (let i = 0; i < w * h; i += 1) {
@@ -178,9 +172,9 @@ function area(mask) { return mask.reduce((n, v) => n + v, 0); }
     }
   }
 
-  assert.equal(data[(10 * w + 10) * 4 + 3], 255, 'the interior stays opaque');
+  assert.equal(data[(30 * w + 30) * 4 + 3], 255, 'the interior stays opaque');
 
-  const edge = data[(5 * w + 10) * 4 + 3];
+  const edge = data[(15 * w + 30) * 4 + 3];
   assert.ok(edge > 0 && edge < 255, `the boundary is softened, not binary (got ${edge})`);
   console.log(`8 no outward bleed; boundary alpha ${edge}`);
 }
@@ -275,11 +269,84 @@ function area(mask) { return mask.reduce((n, v) => n + v, 0); }
   assert.equal(decide([236, 226, 200], [232, 222, 196]), true,
     'a slightly warmer re-render of the base is still base');
 
+  // The jacket blob: an open jacket shades the bodysuit beneath it. Much
+  // darker, same colour — so it is still base and must still be removed.
+  assert.equal(decide([186, 178, 157], CREAM), true,
+    'base in shadow is still base');
+  assert.equal(decide([150, 143, 126], CREAM), true,
+    'even in deep shadow');
+
+  // And the shirt is still kept even when the same jacket shades it.
+  assert.equal(decide([205, 205, 203], CREAM), false,
+    'a shaded white shirt is still a shirt');
+
   // Anything plainly not the base colour never reaches the second test.
   assert.equal(decide(DENIM, CREAM), false, 'denim is never base');
   assert.equal(decide(DENIM, DENIM), false, 'not even where the avatar matches');
 
-  console.log('11 white-over-cream kept; exposed cream still dropped');
+  console.log('11 white-over-cream kept; cream dropped, lit or shaded');
+}
+
+// ---- 12. the guided filter snaps the edge onto the real one --------------
+{
+  // A photo whose garment ends sharply at column 30, and a mask that is wrong
+  // about where that is: it ramps lazily from 25 to 35, as a low-resolution
+  // model would. The refinement should pull the ramp onto column 30.
+  const w = 60, h = 20;
+  const guide = new Float32Array(w * h);
+  const alpha = new Float32Array(w * h);
+
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const i = y * w + x;
+      guide[i] = x < 30 ? 0.15 : 0.85;                        // dark garment, light background
+      alpha[i] = x < 25 ? 1 : x > 35 ? 0 : (35 - x) / 10;     // a soft, misplaced edge
+    }
+  }
+
+  const out = guidedFilterAlpha(alpha, guide, w, h, GUIDE_RADIUS, GUIDE_EPSILON);
+  const at = (x) => out[10 * w + x];
+
+  assert.ok(at(5) > 0.95, `deep inside stays opaque (got ${at(5).toFixed(2)})`);
+  assert.ok(at(55) < 0.05, `deep outside stays clear (got ${at(55).toFixed(2)})`);
+
+  // Either side of the true edge the mask should have become more decided,
+  // because the picture is unambiguous there even though the mask was not.
+  // This is a smoothing operator, not a threshold, so the test is that it moves
+  // the right way and by a real margin — not that it snaps to 0 and 1.
+  const was = (x) => alpha[10 * w + x];
+
+  assert.ok(at(29) > was(29),
+    `just inside the real edge got more solid: ${was(29).toFixed(2)} → ${at(29).toFixed(2)}`);
+  assert.ok(at(31) < was(31),
+    `just outside it got clearer: ${was(31).toFixed(2)} → ${at(31).toFixed(2)}`);
+
+  // The half-way point should now fall on the garment's real edge, column 30,
+  // rather than the column 31 the mask believed.
+  const crossing = (plane) => {
+    for (let x = 0; x < w; x += 1) if (plane[10 * w + x] < 0.5) return x;
+    return -1;
+  };
+
+  assert.equal(crossing(alpha), 31, 'the mask was wrong by a pixel');
+  assert.equal(crossing(out), 30, 'and now it is not');
+
+  // And it must not have bought that by blurring: a hazier boundary is the
+  // opposite of the point. Larger radii do exactly that, which is why this one
+  // is 1.
+  const width = (plane) => {
+    let n = 0;
+    for (let x = 0; x < w; x += 1) {
+      const v = plane[10 * w + x];
+      if (v > 0.05 && v < 0.95) n += 1;
+    }
+    return n;
+  };
+
+  assert.ok(width(out) <= width(alpha),
+    `edge did not get hazier: ${width(alpha)}px → ${width(out)}px`);
+
+  console.log(`12 edge moved onto the real one (col 31 → 30) without blurring: ${width(alpha)}px → ${width(out)}px`);
 }
 
 console.log('\nall assertions passed');

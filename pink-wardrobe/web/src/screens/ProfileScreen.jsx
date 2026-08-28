@@ -6,6 +6,7 @@ import { useTheme } from '../context/ThemeContext';
 import { THEMES, TEXT_SIZES } from '../lib/constants';
 import { listItems, listRecycleBin, listStaleItems, restoreItem } from '../lib/closet';
 import ChangeAvatarSheet from '../components/ChangeAvatarSheet';
+import AvatarViewer from '../components/AvatarViewer';
 import ColourQuiz from '../components/ColourQuiz';
 import StaleItemsSheet from '../components/StaleItemsSheet';
 import { signedUrl } from '../lib/storage';
@@ -20,6 +21,7 @@ export default function ProfileScreen() {
   const [bin, setBin] = useState([]);
   const [panel, setPanel] = useState(null);
   const [quizOpen, setQuizOpen] = useState(false);
+  const [avatarOpen, setAvatarOpen] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState(null);
   const [avatarUrl, setAvatarUrl] = useState(null);
@@ -91,17 +93,24 @@ export default function ProfileScreen() {
 
         <div className="card row" style={{ gap: 'var(--space-4)' }}>
           {avatarUrl ? (
-            <img
-              src={avatarUrl}
-              alt="Your avatar"
-              width={56}
-              height={72}
-              style={{
-                objectFit: 'cover',
-                borderRadius: 'var(--radius-md)',
-                background: 'var(--c-50)',
-              }}
-            />
+            <button
+              type="button"
+              onClick={() => setAvatarOpen(true)}
+              aria-label="View your avatar full screen"
+              style={{ padding: 0, border: 'none', background: 'none', lineHeight: 0 }}
+            >
+              <img
+                src={avatarUrl}
+                alt="Your avatar"
+                width={56}
+                height={72}
+                style={{
+                  objectFit: 'cover',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--c-50)',
+                }}
+              />
+            </button>
           ) : (
             <div
               style={{
@@ -250,6 +259,12 @@ export default function ProfileScreen() {
 
         <button type="button" className="btn btn-ghost" onClick={signOut}>Log out</button>
       </main>
+
+      {avatarOpen && avatarUrl ? (
+        <AvatarViewer openFull onExitFull={() => setAvatarOpen(false)}>
+          <img src={avatarUrl} alt="Your avatar" />
+        </AvatarViewer>
+      ) : null}
 
       {changingAvatar ? (
         <ChangeAvatarSheet

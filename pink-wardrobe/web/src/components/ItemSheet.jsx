@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { CATEGORY_LABELS, PLACEMENTS } from '../lib/constants';
+import LayerThumb from './LayerThumb';
 import { recutWithPlacement } from '../lib/closet';
 import { signedUrl } from '../lib/storage';
 
@@ -75,9 +76,8 @@ export default function ItemSheet({ item, onClose, onDelete, onChanged }) {
             width: 92, height: 118, flex: '0 0 auto', borderRadius: 'var(--radius-md)',
             background: 'var(--c-50)', overflow: 'hidden',
           }}>
-            {url ? (
-              <img src={url} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-            ) : null}
+            <LayerThumb url={url} alt=""
+              bounds={item.layer_path ? item.alignment?.content : null} />
           </div>
 
           <div className="stack" style={{ gap: 'var(--space-1)', minWidth: 0 }}>

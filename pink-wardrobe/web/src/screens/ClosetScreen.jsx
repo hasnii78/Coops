@@ -8,8 +8,8 @@ import { IconPlus, IconSearch } from '../components/Icons';
 import { useAuth } from '../context/AuthContext';
 import { CATEGORIES } from '../lib/constants';
 import {
-  listItems, restoreItem, resumeStrandedItems, retryItem, softDeleteItem,
-  toggleLike, togglePin,
+  generateQueuedItems, listItems, restoreItem, resumeStrandedItems, retryItem,
+  softDeleteItem, toggleLike, togglePin,
 } from '../lib/closet';
 import { staleItems, surpriseMe } from '../lib/suggestions';
 
@@ -26,6 +26,7 @@ export default function ClosetScreen() {
   const [detail, setDetail] = useState(null);
   const [undo, setUndo] = useState(null);
   const [resuming, setResuming] = useState(null);
+  const [generating, setGenerating] = useState(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -117,6 +118,28 @@ export default function ClosetScreen() {
     }
   }
 
+  const queued = useMemo(
+    () => items.filter((item) => item.status === 'queued' && !item.generation_path),
+    [items],
+  );
+
+  async function handleGenerateAll() {
+    setError(null);
+
+    try {
+      const results = await generateQueuedItems(setGenerating);
+      const failed = results.filter((result) => !result.ok);
+      if (failed.length) {
+        setError(`${failed.length} of ${results.length} couldn't be generated. Open each one to see why.`);
+      }
+    } catch (caught) {
+      setError(caught.message);
+    } finally {
+      setGenerating(null);
+      await refresh();
+    }
+  }
+
   async function handleResume(item) {
     try {
       await retryItem(item);
@@ -164,6 +187,28 @@ export default function ClosetScreen() {
 
       <main className="app-main stack">
         {error ? <div className="error-banner" role="alert">{error}</div> : null}
+
+        {queued.length ? (
+          <div className="card stack">
+            <div className="row-between">
+              <div>
+                <strong>
+                  {queued.length === 1 ? '1 piece waiting' : `${queued.length} pieces waiting`}
+                </strong>
+                <div className="muted">
+                  {queued.length === 1 ? '1 credit' : `${queued.length} credits`} — about{' '}
+                  {queued.length * 20} seconds. Nothing is charged until you tap this.
+                </div>
+              </div>
+
+              <button type="button" className="btn" onClick={handleGenerateAll}
+                disabled={Boolean(generating)}>
+                {generating ? <span className="spinner" aria-hidden="true" /> : null}
+                {generating ? `${generating.done} of ${generating.total}` : 'Generate'}
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {resuming ? (
           <div className="card row" role="status" style={{ gap: 'var(--space-3)' }}>

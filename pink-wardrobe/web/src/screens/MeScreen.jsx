@@ -68,6 +68,7 @@ export default function MeScreen() {
   // only the sequence says which one the wearer meant.
   const [picked, setPicked] = useState([]);
   const [pins, setPins] = useState(readPins);
+  const [dragging, setDragging] = useState(null);
   const [openCategory, setOpenCategory] = useState('tops');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -164,6 +165,53 @@ export default function MeScreen() {
       // what, so there is nothing left for a one-per-category rule to protect.
       return [...prev, item];
     });
+  }
+
+  // Dragging a chip onto another swaps it into that position.
+  //
+  // Pointer events rather than HTML drag-and-drop, which does not fire on
+  // touch. The chip under the finger is found by hit-testing the page, so the
+  // list reorders live as it passes over each one.
+  function startDrag(event, from) {
+    const chip = event.currentTarget;
+    chip.setPointerCapture?.(event.pointerId);
+
+    let current = from;
+    let moved = false;
+
+    const onMove = (move) => {
+      const under = document
+        .elementFromPoint(move.clientX, move.clientY)
+        ?.closest('[data-layer-index]');
+
+      if (!under) return;
+
+      const to = Number(under.dataset.layerIndex);
+      if (Number.isNaN(to) || to === current) return;
+
+      moved = true;
+      setPicked((prev) => {
+        const next = [...prev];
+        next.splice(to, 0, ...next.splice(current, 1));
+        return next;
+      });
+      current = to;
+    };
+
+    const onUp = () => {
+      chip.removeEventListener('pointermove', onMove);
+      chip.removeEventListener('pointerup', onUp);
+      chip.removeEventListener('pointercancel', onUp);
+      setDragging(null);
+
+      // A press that never moved is a tap, and a tap removes the piece.
+      if (!moved) toggleItem(picked[current]);
+    };
+
+    setDragging(from);
+    chip.addEventListener('pointermove', onMove);
+    chip.addEventListener('pointerup', onUp);
+    chip.addEventListener('pointercancel', onUp);
   }
 
   function togglePin(item) {
@@ -316,9 +364,11 @@ export default function MeScreen() {
               const accessory = item.category === 'accessories';
 
               return (
-                <span className="chip-group" key={item.id}>
-                  <button type="button" className="chip" aria-pressed="true"
-                    onClick={() => toggleItem(item)}>
+                <span className="chip-group" key={item.id} data-layer-index={index}>
+                  <button type="button"
+                    className={dragging === index ? 'chip chip-dragging' : 'chip'}
+                    aria-pressed="true"
+                    onPointerDown={(event) => startDrag(event, index)}>
                     {accessory ? null : (
                       <span className="chip-badge" aria-label={`layer ${index + 1}`}>
                         {index + 1}
@@ -346,8 +396,8 @@ export default function MeScreen() {
 
         {selectedItems.length > 1 ? (
           <p className="muted" style={{ textAlign: 'center', margin: 0, fontSize: '0.85rem' }}>
-            Numbers are the stacking order — 2 sits over 1. Tap a piece to remove it
-            and pick it again to move it to the top.
+            Numbers are the stacking order — 2 sits over 1. Drag a piece onto
+            another to move it there; tap it to take it off.
           </p>
         ) : null}
 

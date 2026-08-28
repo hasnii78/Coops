@@ -212,6 +212,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
   line-height: 1;
 }
 
+.chip-dragging {
+  opacity: 0.6;
+  transform: scale(1.06);
+}
+
+.chip-group {
+  touch-action: none;
+}
+
 .chip-pin {
   min-height: 28px;
   padding: 0 var(--space-3);

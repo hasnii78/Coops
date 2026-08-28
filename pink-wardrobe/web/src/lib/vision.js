@@ -21,13 +21,12 @@ import {
 
 import {
   COVERAGE_THRESHOLD,
-  ERODE_RADIUS,
   classCoverage,
-  erodeMask,
   featherEdges,
   fillEnclosedHoles,
   isUncoveredBase,
   keepAnchoredComponents,
+  labDistanceSq,
   rgbToLab,
   trustsBaseline,
 } from './mask';
@@ -403,6 +402,16 @@ const MIN_GARMENT_COVERAGE = 0.002;
  */
 const UNCHANGED_TOLERANCE = 10;
 
+/**
+ * How different a pixel inside a placement crop must be to count as the
+ * accessory rather than as the arm it sits on.
+ *
+ * Generous, because the generator re-renders the whole photograph and a wrist
+ * shifts a little between the two. Anything smaller than this is noise, and the
+ * largest-blob filter afterwards removes what noise remains.
+ */
+const ADDED_TOLERANCE = 18;
+
 /** Draw an image at the given size and hand back its pixels. */
 async function sampleAligned(blob, width, height) {
   try {
@@ -448,41 +457,6 @@ function placementBox(placement, landmarks) {
 }
 
 /**
- * Run the segmenter on a crop, and return its mask in full-frame terms.
- *
- * The model resizes whatever it is given to 256x256. On a full-body photo a
- * watch is perhaps five pixels across by the time it gets there, which is why
- * nothing was ever found. Handing it a crop of the wrist spends the same 256
- * pixels on a hand instead of a whole person, and the watch becomes plainly
- * visible to it.
- */
-async function segmentCrop(bitmap, box) {
-  const width = box.right - box.left;
-  const height = box.bottom - box.top;
-  if (width < 16 || height < 16) return null;
-
-  const canvas = canvasFor(width, height);
-  canvas.getContext('2d').drawImage(
-    bitmap, box.left, box.top, width, height, 0, 0, width, height,
-  );
-
-  const segmenter = await getSegmenter();
-  const result = segmenter.segment(canvas);
-  const mask = result.categoryMask;
-
-  if (!mask) {
-    result.close?.();
-    return null;
-  }
-
-  const data = mask.getAsUint8Array().slice();
-  const shape = { width: mask.width, height: mask.height };
-  result.close?.();
-
-  return { data, ...shape, box, cropWidth: width, cropHeight: height };
-}
-
-/**
  * Cut the garment out of a generated image.
  *
  * Three filters decide which pixels are garment, each removing something the
@@ -511,18 +485,22 @@ export async function segmentGarment(source, category, options = {}) {
 
   const bitmap = await toBitmap(source);
 
+  // A placed accessory is looked for by difference rather than by class.
+  //
+  // The segmentation model expects a person: a head, a torso, limbs. Handed a
+  // tight crop of a wrist it has no idea what it is looking at and returns
+  // nothing, which is why cropping — right about the resolution — still found
+  // no watch. But a watch is the only thing in that crop that was not there
+  // before, so comparing the two photographs finds it without the model
+  // needing any concept of a watch at all.
   const box = placement ? placementBox(placement, landmarks) : null;
-  const cropped = box ? await segmentCrop(bitmap, box) : null;
 
   let result = null;
-  let mask;
-  let maskWidth;
-  let maskHeight;
+  let mask = null;
+  let maskWidth = 0;
+  let maskHeight = 0;
 
-  if (cropped) {
-    ({ width: maskWidth, height: maskHeight } = cropped);
-    mask = cropped.data;
-  } else {
+  if (!box) {
     const segmenter = await getSegmenter();
     result = segmenter.segment(bitmap);
 
@@ -546,7 +524,7 @@ export async function segmentGarment(source, category, options = {}) {
   const wanted = CATEGORY_CLASSES[category] || DEFAULT_CLASSES;
 
   // A crop is its own boundary, so the band would only fight it.
-  const bounds = cropped ? null : bandBounds(category, landmarks);
+  const bounds = box ? null : bandBounds(category, landmarks);
   const top = bounds ? bounds.top : 0;
   const bottom = bounds ? bounds.bottom : bitmap.height;
 
@@ -559,17 +537,13 @@ export async function segmentGarment(source, category, options = {}) {
     ? await sampleAligned(avatarBlob, bitmap.width, bitmap.height)
     : null;
 
-  // Image pixels map into mask space differently for a crop: only the cropped
-  // region has any mask at all, and it fills the whole 256x256.
-  const originX = cropped ? cropped.box.left : 0;
-  const originY = cropped ? cropped.box.top : 0;
-  const scaleX = maskWidth / (cropped ? cropped.cropWidth : bitmap.width);
-  const scaleY = maskHeight / (cropped ? cropped.cropHeight : bitmap.height);
+  const scaleX = maskWidth / bitmap.width;
+  const scaleY = maskHeight / bitmap.height;
 
-  const firstX = cropped ? cropped.box.left : 0;
-  const lastX = cropped ? cropped.box.right : bitmap.width;
-  const firstY = cropped ? cropped.box.top : 0;
-  const lastY = cropped ? cropped.box.bottom : bitmap.height;
+  const firstX = box ? box.left : 0;
+  const lastX = box ? box.right : bitmap.width;
+  const firstY = box ? box.top : 0;
+  const lastY = box ? box.bottom : bitmap.height;
 
   // Built as two masks so the baseline filter can be judged and, if it is
   // clearly misfiring, thrown away rather than trusted.
@@ -581,27 +555,31 @@ export async function segmentGarment(source, category, options = {}) {
 
   for (let y = Math.max(firstY, Math.floor(top)); y < Math.min(lastY, Math.ceil(bottom)); y += 1) {
     const row = y * bitmap.width;
-    const sy = (y + 0.5 - originY) * scaleY;
+    const sy = (y + 0.5) * scaleY;
 
     for (let x = firstX; x < lastX; x += 1) {
-      const coverage = classCoverage(
-        mask, maskWidth, maskHeight, wanted, (x + 0.5 - originX) * scaleX, sy,
-      );
-      if (coverage < COVERAGE_THRESHOLD) continue;
+      const offset = (row + x) * 4;
+
+      if (box) {
+        // Inside a placement crop, "different from before" is the whole test.
+        if (!before) continue;
+
+        const distance = labDistanceSq(
+          rgbToLab(before[offset], before[offset + 1], before[offset + 2]),
+          pixels[offset], pixels[offset + 1], pixels[offset + 2],
+        );
+
+        if (distance < ADDED_TOLERANCE * ADDED_TOLERANCE) continue;
+      } else {
+        const coverage = classCoverage(
+          mask, maskWidth, maskHeight, wanted, (x + 0.5) * scaleX, sy,
+        );
+        if (coverage < COVERAGE_THRESHOLD) continue;
+      }
 
       inClass[row + x] = 1;
       classCount += 1;
 
-      const offset = (row + x) * 4;
-
-      // Both tests have to agree before a pixel is discarded as base layer.
-      //
-      // Colour alone said a white shirt was the cream base and deleted it —
-      // which by colour it very nearly is. Position alone is fooled by the
-      // generator re-rendering the whole photo a shade differently. Together
-      // they only agree where the pixel both looks like the base garment AND
-      // looks like what was already there, which is what an uncovered patch of
-      // base actually is.
       if (isUncoveredBase(
         [pixels[offset], pixels[offset + 1], pixels[offset + 2]],
         baseLab,
@@ -635,10 +613,15 @@ export async function segmentGarment(source, category, options = {}) {
     kept,
     bitmap.width,
     bitmap.height,
-    cropped ? null : anchorBounds(category, landmarks),
+    box ? null : anchorBounds(category, landmarks),
   );
   kept = fillEnclosedHoles(kept, bitmap.width, bitmap.height);
-  kept = erodeMask(kept, bitmap.width, bitmap.height, ERODE_RADIUS);
+
+  // No erosion. It was added to absorb the coarse, blocky boundary of a mask
+  // read with its nearest texel, and bilinear coverage — added in the same
+  // batch — replaced that boundary with a smooth one. What is left of it just
+  // shaves a pixel off every garment, which is how a bare toe showed under a
+  // shoe and a strip of leg beside a trouser leg.
 
   // Counted after every pass, so a cut emptied by the shape filters is caught
   // as surely as one the model never found.
@@ -860,6 +843,55 @@ export async function alignToMaster({
       },
     };
   }
+}
+
+/**
+ * Where the garment actually sits inside its layer, as fractions of the frame.
+ *
+ * A layer is a whole-body-sized transparent image with the garment in its
+ * proper place, which is what makes stacking work — but it means a pair of
+ * shoes is a small object at the bottom of a tall empty picture. Shown as a
+ * closet tile that reads as blank, and both pairs of shoes looked like failures
+ * when they were nothing of the kind.
+ *
+ * Returns null for an empty layer; the caller has already rejected those.
+ */
+export async function contentBounds(blob) {
+  const bitmap = await toBitmap(blob);
+  const canvas = canvasFor(bitmap.width, bitmap.height);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(bitmap, 0, 0);
+
+  const { data } = context.getImageData(0, 0, bitmap.width, bitmap.height);
+
+  let left = bitmap.width;
+  let right = -1;
+  let top = bitmap.height;
+  let bottom = -1;
+
+  for (let y = 0; y < bitmap.height; y += 1) {
+    const row = y * bitmap.width;
+
+    for (let x = 0; x < bitmap.width; x += 1) {
+      // Ignore the faintest edge pixels, so a stray wisp does not stretch the
+      // box across the whole frame.
+      if (data[(row + x) * 4 + 3] < 16) continue;
+
+      if (x < left) left = x;
+      if (x > right) right = x;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+    }
+  }
+
+  if (right < left || bottom < top) return null;
+
+  return {
+    left: left / bitmap.width,
+    top: top / bitmap.height,
+    width: (right - left + 1) / bitmap.width,
+    height: (bottom - top + 1) / bitmap.height,
+  };
 }
 
 // ----------------------------------------------------------- dominant colour
