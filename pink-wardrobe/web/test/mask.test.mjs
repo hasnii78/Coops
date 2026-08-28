@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {
-  keepAnchoredComponents, fillEnclosedHoles, decontaminate,
+  keepAnchoredComponents, keepLargestComponent, fillEnclosedHoles, decontaminate,
   classCoverage, COVERAGE_THRESHOLD, trustsBaseline, isUncoveredBase, rgbToLab,
   guidedFilterAlpha, GUIDE_RADIUS, GUIDE_EPSILON,
 } from '../src/lib/mask.js';
@@ -243,7 +243,7 @@ function area(mask) { return mask.reduce((n, v) => n + v, 0); }
 
 // ---- 11. a white shirt is not the cream base underneath it ---------------
 {
-  const BASE_TOL = 22;
+  const BASE_TOL = 10;   // matches BASE_COLOUR_TOLERANCE in vision.js
   const UNCHANGED_TOL = 10;
 
   const CREAM = [232, 222, 196];   // the skin-toned bodysuit
@@ -254,13 +254,13 @@ function area(mask) { return mask.reduce((n, v) => n + v, 0); }
   const decide = (pixel, avatarPixel) =>
     isUncoveredBase(pixel, baseLab, avatarPixel, BASE_TOL, UNCHANGED_TOL);
 
-  // The failure that deleted the shirt: by colour alone, white reads as cream.
-  const byColourAlone = decide(WHITE, null);
-  assert.equal(byColourAlone, true, 'colour alone really cannot tell them apart');
-
-  // With the avatar to compare against, it can: that chest was cream and is
-  // now white, so something was added there.
-  assert.equal(decide(WHITE, CREAM), false, 'a white shirt over cream is kept');
+  // White is now far enough from cream to be kept on its own, without needing
+  // the avatar to vouch for it. At the old tolerance of 22 it was not, and
+  // every near-neutral pixel — white, grey, black — read as bodysuit.
+  assert.equal(decide(WHITE, null), false, 'white is not cream, on colour alone');
+  assert.equal(decide(WHITE, CREAM), false, 'nor with the avatar to compare');
+  assert.equal(decide([210, 210, 212], CREAM), false, 'grey is not cream either');
+  assert.equal(decide([40, 40, 42], CREAM), false, 'nor is near-black');
 
   // Uncovered base — cream then, cream now — is still removed.
   assert.equal(decide(CREAM, CREAM), true, 'exposed base is still dropped');
@@ -284,7 +284,7 @@ function area(mask) { return mask.reduce((n, v) => n + v, 0); }
   assert.equal(decide(DENIM, CREAM), false, 'denim is never base');
   assert.equal(decide(DENIM, DENIM), false, 'not even where the avatar matches');
 
-  console.log('11 white-over-cream kept; cream dropped, lit or shaded');
+  console.log('11 neutrals kept on colour alone; cream dropped, lit or shaded');
 }
 
 // ---- 12. the guided filter snaps the edge onto the real one --------------
@@ -347,6 +347,41 @@ function area(mask) { return mask.reduce((n, v) => n + v, 0); }
     `edge did not get hazier: ${width(alpha)}px → ${width(out)}px`);
 
   console.log(`12 edge moved onto the real one (col 31 → 30) without blurring: ${width(alpha)}px → ${width(out)}px`);
+}
+
+// ---- 13. an accessory is the one solid thing in its crop ------------------
+{
+  // What the wrist crop actually produces: a watch band, plus slivers where
+  // the generator re-rendered the arm a shade differently and the hand moved a
+  // pixel. Everything here "changed"; only one of them is the watch.
+  const w = 80, h = 80;
+  const mask = new Uint8Array(w * h);
+
+  const box = (x0, y0, x1, y1) => {
+    for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) mask[y * w + x] = 1;
+  };
+
+  box(30, 34, 50, 46);          // the watch
+  box(20, 10, 22, 70);          // a sliver down the edge of the arm
+  box(58, 20, 60, 64);          // and down the other edge
+  box(40, 70, 46, 74);          // the hand, shifted
+
+  const out = keepLargestComponent(mask, w, h);
+
+  assert.equal(out[40 * w + 40], 1, 'the watch survives');
+  assert.equal(out[40 * w + 21], 0, 'the arm sliver does not');
+  assert.equal(out[40 * w + 59], 0, 'nor the other one');
+  assert.equal(out[72 * w + 43], 0, 'nor the shifted hand');
+
+  const area = out.reduce((n, v) => n + v, 0);
+  assert.equal(area, 20 * 12, 'exactly the watch remains');
+
+  // One blob in, the same blob out — nothing to choose between.
+  const single = new Uint8Array(w * h);
+  for (let y = 30; y < 50; y += 1) for (let x = 30; x < 50; x += 1) single[y * w + x] = 1;
+  assert.deepEqual(keepLargestComponent(single, w, h), single, 'a lone blob is untouched');
+
+  console.log('13 watch kept, re-render slivers dropped');
 }
 
 console.log('\nall assertions passed');

@@ -11,7 +11,7 @@
     "fetch-models": "node scripts/fetch-models.mjs",
     "check-bundle": "node scripts/check-bundle.mjs",
     "test": "node test/mask.test.mjs",
-    "test:browser": "node test/stacking.test.mjs"
+    "test:browser": "node test/stacking.test.mjs && node test/fullscreen.test.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^6.1.2",

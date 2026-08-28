@@ -26,6 +26,7 @@ import {
   fillEnclosedHoles,
   isUncoveredBase,
   keepAnchoredComponents,
+  keepLargestComponent,
   labDistanceSq,
   rgbToLab,
   trustsBaseline,
@@ -336,10 +337,16 @@ function anchorBounds(category, landmarks) {
   return resolveBand(ANCHOR_BANDS[category], landmarks);
 }
 
-// Below this Lab distance a pixel is treated as the base layer rather than the
-// garment. Generous enough to absorb shading and JPEG noise on the base
-// garment, tight enough that a genuinely different colour survives.
-const BASE_COLOUR_TOLERANCE = 22;
+// Below this colour distance a pixel is treated as the base layer rather than
+// the garment.
+//
+// Measured in colour alone, with lightness ignored, which is what makes the
+// number smaller than it looks. Cream sits at roughly (0, 15) in that space and
+// white, grey and black all sit near (0, 0) — only fifteen away. At 22, every
+// near-neutral pixel in the picture read as "this is the bodysuit", and the
+// filter started biting holes in a denim jacket. Ten keeps cream, shaded or
+// lit, on one side and everything neutral on the other.
+const BASE_COLOUR_TOLERANCE = 10;
 
 /**
  * Where each category attaches to the body.
@@ -609,12 +616,13 @@ export async function segmentGarment(source, category, options = {}) {
   let kept = believable ? afterBaseline : inClass;
   const covered = believable ? baselineCount : classCount;
 
-  kept = keepAnchoredComponents(
-    kept,
-    bitmap.width,
-    bitmap.height,
-    box ? null : anchorBounds(category, landmarks),
-  );
+  kept = box
+    // Inside a placement crop the accessory is the one solid object; the rest
+    // of what changed is the generator re-rendering the arm around it.
+    ? keepLargestComponent(kept, bitmap.width, bitmap.height)
+    : keepAnchoredComponents(
+      kept, bitmap.width, bitmap.height, anchorBounds(category, landmarks),
+    );
   kept = fillEnclosedHoles(kept, bitmap.width, bitmap.height);
 
   // No erosion. It was added to absorb the coarse, blocky boundary of a mask

@@ -201,6 +201,35 @@ export function keepAnchoredComponents(kept, width, height, bounds) {
 }
 
 /**
+ * Keep only the biggest connected blob.
+ *
+ * For something found by comparing two photographs rather than by asking a
+ * model, this is the whole of the cleanup. The generator re-renders the entire
+ * picture, so an arm comes back a shade different and a hand a pixel or two
+ * over; all of that registers as "changed". The watch is one solid object and
+ * that drift is thin slivers around it, so the largest blob is the watch and
+ * everything else is the re-render.
+ */
+export function keepLargestComponent(kept, width, height) {
+  const { labels, count, areas } = labelComponents(kept, width, height);
+  if (count <= 1) return kept;
+
+  let best = 0;
+  let bestArea = 0;
+
+  for (let id = 1; id <= count; id += 1) {
+    if (areas[id] > bestArea) {
+      bestArea = areas[id];
+      best = id;
+    }
+  }
+
+  const out = new Uint8Array(kept.length);
+  for (let i = 0; i < kept.length; i += 1) out[i] = labels[i] === best ? 1 : 0;
+  return out;
+}
+
+/**
  * Restore small pockets the filters punched out of the middle of a garment.
  *
  * With a skin-toned base layer, colour subtraction can bite into a beige or

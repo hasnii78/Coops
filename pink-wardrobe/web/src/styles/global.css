@@ -438,10 +438,18 @@ button { font: inherit; color: inherit; cursor: pointer; }
   background: #0b0b0d;
 }
 
+/*
+ * Fills the screen and lets the photograph decide its own shape.
+ *
+ * This used to be pinned to 3:4. An avatar photograph is much taller than that,
+ * so it was fitted inside a box that was already narrower than the screen —
+ * letterboxed twice, and small in the middle of all that black.
+ */
 .viewer-stage-full {
   width: 100%;
-  max-width: min(100%, 78vh);
-  aspect-ratio: 3 / 4;
+  height: 100%;
+  flex: 1;
+  min-height: 0;
   background: transparent;
   border-radius: var(--radius-md);
 }

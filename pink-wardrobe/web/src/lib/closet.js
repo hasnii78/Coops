@@ -244,12 +244,21 @@ async function cutAndSave(item, profile, userId) {
   });
 
   // Step 5 — align it to the master template.
-  const { blob: aligned, meta } = await alignToMaster({
-    layerBlob: cutout,
-    generationBlob,
-    masterLandmarks: profile.avatar_landmarks,
-    category: item.category,
-  });
+  //
+  // Not for a placed accessory. Alignment is a nudge fitted to the shoulders
+  // and hips, which suits a shirt and is the worst possible case for a watch:
+  // tiny, and about as far from those anchors as anything on the body gets, so
+  // a fraction of a degree there is a visible miss at the wrist. It also earns
+  // nothing, because the photograph it was cut from is this avatar in this
+  // pose — the watch was already in the right place before anything moved it.
+  const { blob: aligned, meta } = item.placement
+    ? { blob: cutout, meta: { aligned: false, reason: 'placed accessory' } }
+    : await alignToMaster({
+      layerBlob: cutout,
+      generationBlob,
+      masterLandmarks: profile.avatar_landmarks,
+      category: item.category,
+    });
 
   // Step 6 — save the reusable layer.
   const layerPath = `${userId}/layers/${item.id}.png`;
