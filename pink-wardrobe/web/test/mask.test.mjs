@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   keepAnchoredComponents, fillEnclosedHoles, erodeMask, decontaminate,
-  classCoverage, COVERAGE_THRESHOLD, trustsBaseline,
+  classCoverage, COVERAGE_THRESHOLD, trustsBaseline, isUncoveredBase, rgbToLab,
 } from '../src/lib/mask.js';
 
 const W = 120, H = 200;
@@ -245,6 +245,41 @@ function area(mask) { return mask.reduce((n, v) => n + v, 0); }
   assert.equal(trustsBaseline(0, 0), true, 'an empty class mask is not a baseline problem');
 
   console.log('10 baseline filter rejected when it claims the whole garment');
+}
+
+// ---- 11. a white shirt is not the cream base underneath it ---------------
+{
+  const BASE_TOL = 22;
+  const UNCHANGED_TOL = 10;
+
+  const CREAM = [232, 222, 196];   // the skin-toned bodysuit
+  const WHITE = [250, 250, 248];   // a white tee over it
+  const DENIM = [70, 90, 130];     // something obviously different
+  const baseLab = rgbToLab(...CREAM);
+
+  const decide = (pixel, avatarPixel) =>
+    isUncoveredBase(pixel, baseLab, avatarPixel, BASE_TOL, UNCHANGED_TOL);
+
+  // The failure that deleted the shirt: by colour alone, white reads as cream.
+  const byColourAlone = decide(WHITE, null);
+  assert.equal(byColourAlone, true, 'colour alone really cannot tell them apart');
+
+  // With the avatar to compare against, it can: that chest was cream and is
+  // now white, so something was added there.
+  assert.equal(decide(WHITE, CREAM), false, 'a white shirt over cream is kept');
+
+  // Uncovered base — cream then, cream now — is still removed.
+  assert.equal(decide(CREAM, CREAM), true, 'exposed base is still dropped');
+
+  // A shade of drift in the re-render must not resurrect the base.
+  assert.equal(decide([236, 226, 200], [232, 222, 196]), true,
+    'a slightly warmer re-render of the base is still base');
+
+  // Anything plainly not the base colour never reaches the second test.
+  assert.equal(decide(DENIM, CREAM), false, 'denim is never base');
+  assert.equal(decide(DENIM, DENIM), false, 'not even where the avatar matches');
+
+  console.log('11 white-over-cream kept; exposed cream still dropped');
 }
 
 console.log('\nall assertions passed');

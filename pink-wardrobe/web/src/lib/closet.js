@@ -189,7 +189,7 @@ export async function finishProcessing(item) {
 
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('avatar_landmarks, avatar_base_color, avatar_version')
+    .select('avatar_path, avatar_landmarks, avatar_base_color, avatar_version')
     .eq('id', userId)
     .single();
 
@@ -213,6 +213,19 @@ export async function finishProcessing(item) {
 async function cutAndSave(item, profile, userId) {
   const generationBlob = await download(item.generation_path, BUCKET_WARDROBE);
 
+  // The bare avatar, for comparison. Colour alone cannot tell a white shirt
+  // from the cream base garment underneath it; the same pixel in the avatar
+  // photo can, because there the chest is base and in the generation it is
+  // shirt. Optional — if it will not load the cut falls back to colour alone.
+  let avatarBlob = null;
+  try {
+    if (profile.avatar_path) {
+      avatarBlob = await download(profile.avatar_path, BUCKET_WARDROBE);
+    }
+  } catch {
+    // Not worth failing a cut over; the colour test still applies.
+  }
+
   // Step 4 — cut the garment out. Landmarks are detected on the generation
   // itself, not the avatar: the band has to follow the body in THIS image.
   let generationLandmarks = null;
@@ -226,6 +239,7 @@ async function cutAndSave(item, profile, userId) {
     landmarks: generationLandmarks,
     baseColor: profile.avatar_base_color,
     placement: item.placement,
+    avatarBlob,
   });
 
   // Step 5 — align it to the master template.

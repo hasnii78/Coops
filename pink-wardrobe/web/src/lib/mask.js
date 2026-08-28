@@ -443,3 +443,64 @@ export function decontaminate(data, kept, width, height) {
   }
 }
 
+
+/** Squared distance in Lab, for comparing a pixel to the base colour. */
+export function labDistanceSq(lab, r, g, b) {
+  const p = rgbToLab(r, g, b);
+  const dl = p[0] - lab[0];
+  const da = p[1] - lab[1];
+  const db = p[2] - lab[2];
+  return dl * dl + da * da + db * db;
+}
+
+export function rgbToLab(r, g, b) {
+  const lin = (c) => {
+    const v = c / 255;
+    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  const R = lin(r);
+  const G = lin(g);
+  const B = lin(b);
+
+  let X = (R * 0.4124 + G * 0.3576 + B * 0.1805) / 0.95047;
+  let Y = R * 0.2126 + G * 0.7152 + B * 0.0722;
+  let Z = (R * 0.0193 + G * 0.1192 + B * 0.9505) / 1.08883;
+
+  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  X = f(X); Y = f(Y); Z = f(Z);
+
+  return [116 * Y - 16, 500 * (X - Y), 200 * (Y - Z)];
+}
+
+
+/**
+ * Whether a garment-class pixel is really uncovered base layer.
+ *
+ * Two independent signals, and both must agree.
+ *
+ * Colour alone compares the pixel to the base garment's measured colour. It
+ * deleted a white shirt in its entirety, because against a cream base a white
+ * shirt genuinely is that colour, near enough.
+ *
+ * Position alone compares the pixel to the same point in the bare avatar photo:
+ * where nothing was added, nothing changed. On its own it is fooled by the
+ * generator re-rendering the whole photo a shade warmer or cooler.
+ *
+ * Together they agree only where the pixel both looks like the base garment and
+ * looks like what was already there — which is what a patch of uncovered base
+ * actually is. A white shirt fails the second test: the chest used to be cream
+ * and now is white.
+ */
+export function isUncoveredBase(pixel, base, avatarPixel, baseTolerance, unchangedTolerance) {
+  if (!base) return false;
+
+  const looksLikeBase =
+    labDistanceSq(base, pixel[0], pixel[1], pixel[2]) < baseTolerance * baseTolerance;
+
+  if (!looksLikeBase) return false;
+  if (!avatarPixel) return true;
+
+  const avatarLab = rgbToLab(avatarPixel[0], avatarPixel[1], avatarPixel[2]);
+  return labDistanceSq(avatarLab, pixel[0], pixel[1], pixel[2])
+    < unchangedTolerance * unchangedTolerance;
+}

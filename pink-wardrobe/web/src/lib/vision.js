@@ -26,7 +26,9 @@ import {
   erodeMask,
   featherEdges,
   fillEnclosedHoles,
+  isUncoveredBase,
   keepAnchoredComponents,
+  rgbToLab,
   trustsBaseline,
 } from './mask';
 
@@ -335,34 +337,6 @@ function anchorBounds(category, landmarks) {
   return resolveBand(ANCHOR_BANDS[category], landmarks);
 }
 
-/** Squared distance in Lab, for comparing a pixel to the base colour. */
-function labDistanceSq(lab, r, g, b) {
-  const p = rgbToLab(r, g, b);
-  const dl = p[0] - lab[0];
-  const da = p[1] - lab[1];
-  const db = p[2] - lab[2];
-  return dl * dl + da * da + db * db;
-}
-
-function rgbToLab(r, g, b) {
-  const lin = (c) => {
-    const v = c / 255;
-    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-  };
-  const R = lin(r);
-  const G = lin(g);
-  const B = lin(b);
-
-  let X = (R * 0.4124 + G * 0.3576 + B * 0.1805) / 0.95047;
-  let Y = R * 0.2126 + G * 0.7152 + B * 0.0722;
-  let Z = (R * 0.0193 + G * 0.1192 + B * 0.9505) / 1.08883;
-
-  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
-  X = f(X); Y = f(Y); Z = f(Z);
-
-  return [116 * Y - 16, 500 * (X - Y), 200 * (Y - Z)];
-}
-
 // Below this Lab distance a pixel is treated as the base layer rather than the
 // garment. Generous enough to absorb shading and JPEG noise on the base
 // garment, tight enough that a genuinely different colour survives.
@@ -419,6 +393,28 @@ const PLACEMENT_CROPS = {
  * and an empty pair of trainers came to sit in the closet marked ready.
  */
 const MIN_GARMENT_COVERAGE = 0.002;
+
+/**
+ * Lab distance below which a pixel counts as untouched by the generator.
+ *
+ * Much tighter than the base-colour tolerance, because this compares the same
+ * point in two renders of the same scene rather than a colour to a swatch.
+ * Anything looser and a white shirt over a cream base reads as unchanged.
+ */
+const UNCHANGED_TOLERANCE = 10;
+
+/** Draw an image at the given size and hand back its pixels. */
+async function sampleAligned(blob, width, height) {
+  try {
+    const bitmap = await toBitmap(blob);
+    const canvas = canvasFor(width, height);
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(bitmap, 0, 0, width, height);
+    return context.getImageData(0, 0, width, height).data;
+  } catch {
+    return null;
+  }
+}
 
 /** Pixel box around a landmark, clamped to the frame. */
 function placementBox(placement, landmarks) {
@@ -509,7 +505,9 @@ async function segmentCrop(bitmap, box) {
  * the crop itself replaces the band.
  */
 export async function segmentGarment(source, category, options = {}) {
-  const { landmarks = null, baseColor = null, placement = null } = options;
+  const {
+    landmarks = null, baseColor = null, placement = null, avatarBlob = null,
+  } = options;
 
   const bitmap = await toBitmap(source);
 
@@ -553,7 +551,13 @@ export async function segmentGarment(source, category, options = {}) {
   const bottom = bounds ? bounds.bottom : bitmap.height;
 
   const baseLab = baseColor ? rgbToLab(baseColor.r, baseColor.g, baseColor.b) : null;
-  const toleranceSq = BASE_COLOUR_TOLERANCE * BASE_COLOUR_TOLERANCE;
+
+  // The bare avatar, drawn at the generation's size so the two line up pixel
+  // for pixel. Where the generation still looks like the avatar, nothing was
+  // added there.
+  const before = avatarBlob
+    ? await sampleAligned(avatarBlob, bitmap.width, bitmap.height)
+    : null;
 
   // Image pixels map into mask space differently for a crop: only the cropped
   // region has any mask at all, and it fills the whole 256x256.
@@ -590,11 +594,21 @@ export async function segmentGarment(source, category, options = {}) {
 
       const offset = (row + x) * 4;
 
-      if (
-        baseLab &&
-        labDistanceSq(baseLab, pixels[offset], pixels[offset + 1], pixels[offset + 2]) <
-          toleranceSq
-      ) {
+      // Both tests have to agree before a pixel is discarded as base layer.
+      //
+      // Colour alone said a white shirt was the cream base and deleted it —
+      // which by colour it very nearly is. Position alone is fooled by the
+      // generator re-rendering the whole photo a shade differently. Together
+      // they only agree where the pixel both looks like the base garment AND
+      // looks like what was already there, which is what an uncovered patch of
+      // base actually is.
+      if (isUncoveredBase(
+        [pixels[offset], pixels[offset + 1], pixels[offset + 2]],
+        baseLab,
+        before && [before[offset], before[offset + 1], before[offset + 2]],
+        BASE_COLOUR_TOLERANCE,
+        UNCHANGED_TOLERANCE,
+      )) {
         continue;
       }
 
