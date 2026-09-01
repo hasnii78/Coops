@@ -7,7 +7,7 @@ import { Component } from 'react';
  * phone there is no console to check, so a crash without a visible message is
  * indistinguishable from the app being broken beyond repair.
  */
-export function ConfigScreen({ title, message, hint }) {
+export function ConfigScreen({ title, message, hint, actionLabel, onAction }) {
   return (
     <main
       className="app-shell"
@@ -28,8 +28,8 @@ export function ConfigScreen({ title, message, hint }) {
           </p>
         ) : null}
 
-        <button type="button" className="btn" onClick={() => window.location.reload()}>
-          Try again
+        <button type="button" className="btn" onClick={onAction ?? (() => window.location.reload())}>
+          {actionLabel || 'Try again'}
         </button>
       </div>
     </main>

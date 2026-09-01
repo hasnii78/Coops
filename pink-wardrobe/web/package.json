@@ -10,7 +10,7 @@
     "lint": "eslint src --ext js,jsx",
     "fetch-models": "node scripts/fetch-models.mjs",
     "check-bundle": "node scripts/check-bundle.mjs",
-    "test": "node test/mask.test.mjs",
+    "test": "node test/mask.test.mjs && node test/profile-retry.test.mjs",
     "test:browser": "node test/stacking.test.mjs && node test/fullscreen.test.mjs"
   },
   "dependencies": {

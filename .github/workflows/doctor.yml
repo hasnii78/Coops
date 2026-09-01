@@ -209,8 +209,6 @@ jobs:
         env:
           URL: ${{ secrets.VITE_SUPABASE_URL }}
           ANON: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           set -uo pipefail
           # The app reduces the configured URL to its origin; do the same here,
@@ -267,11 +265,34 @@ jobs:
           echo ""
           echo "SIGN-UP WORKS END TO END."
 
-          # Clean up, so probe accounts do not accumulate.
-          curl -sS -o /dev/null -X DELETE \
-            -H "Authorization: Bearer $TOKEN" \
-            "https://api.supabase.com/v1/projects/$REF/auth/users/$uid" || true
-          echo "Test account removed."
+          # Clean up the profile row, which the app's own RLS policy allows a
+          # user to delete for themselves — verified against the migration
+          # rather than assumed, unlike the call this replaces.
+          #
+          # That call deleted nothing: api.supabase.com/v1/projects/{ref} is
+          # the project-management API and has no route for removing one
+          # GoTrue user, and SUPABASE_ACCESS_TOKEN is a personal access token
+          # for that API, not the service-role key deleting a user actually
+          # needs. It failed every run behind `|| true`, which is why probe
+          # accounts (ci123456…) were showing up in the profiles table with no
+          # avatar — this workflow's own leftovers, not a bug for anyone
+          # running the app to chase.
+          delstatus=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "apikey: $ANON" -H "Authorization: Bearer $token" \
+            "$base/rest/v1/profiles?id=eq.$uid")
+
+          if [ "$delstatus" = "200" ] || [ "$delstatus" = "204" ]; then
+            echo "Test profile row removed."
+          else
+            echo "::warning::Could not remove the test profile row (HTTP $delstatus)."
+          fi
+
+          # The auth user itself is not removed: deleting an account other
+          # than your own needs the service-role key, which this workflow does
+          # not hold, deliberately — see supabase/functions for why. It is
+          # harmless, and visible only in Authentication -> Users, never in
+          # the profiles table a real signup would show up in.
+          echo "Note: the disposable auth user ($email) remains in Authentication -> Users."
 
       - name: Summary
         if: always()

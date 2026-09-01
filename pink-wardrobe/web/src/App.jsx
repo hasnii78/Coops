@@ -15,7 +15,9 @@ import SavedScreen from './screens/SavedScreen';
 import ProfileScreen from './screens/ProfileScreen';
 
 function Gate() {
-  const { user, loading, hasAvatar } = useAuth();
+  const {
+    user, loading, hasAvatar, profileError, refreshProfile,
+  } = useAuth();
 
   if (loading) {
     return (
@@ -26,6 +28,22 @@ function Gate() {
   }
 
   if (!user) return <AuthScreen />;
+
+  // A profile that failed to load looks identical to one that does not exist
+  // yet unless this is checked first — and unlike a fresh signup, the account
+  // behind it may already have layers keyed to an avatar this screen has no
+  // way to know about. Retrying is safe either way; guessing "no avatar" is
+  // not.
+  if (profileError) {
+    return (
+      <ConfigScreen
+        title="Couldn't load your account"
+        message="Check your connection and try again — nothing has been changed or lost."
+        actionLabel="Retry"
+        onAction={refreshProfile}
+      />
+    );
+  }
 
   // Only the avatar gates the app: without a locked pose template there is
   // nothing to align garment layers to. The colour questions feed outfit
